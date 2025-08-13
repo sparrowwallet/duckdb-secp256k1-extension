@@ -136,3 +136,51 @@ SELECT min_outpoint(
 ) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
 ----
 true
+
+# Test secp256k1_tagged_sha256 function basic functionality
+query I
+SELECT octet_length(secp256k1_tagged_sha256('test_tag', 'test_message'));
+----
+32
+
+# Test secp256k1_tagged_sha256 produces different hashes for different tags
+query I
+SELECT secp256k1_tagged_sha256('tag1', 'message') != secp256k1_tagged_sha256('tag2', 'message');
+----
+true
+
+# Test secp256k1_tagged_sha256 produces different hashes for different messages
+query I
+SELECT secp256k1_tagged_sha256('tag', 'message1') != secp256k1_tagged_sha256('tag', 'message2');
+----
+true
+
+# Test secp256k1_tagged_sha256 is deterministic (same inputs produce same output)
+query I
+SELECT secp256k1_tagged_sha256('BIP0340/challenge', 'Hello') = secp256k1_tagged_sha256('BIP0340/challenge', 'Hello');
+----
+true
+
+# Test secp256k1_tagged_sha256 with binary data
+query I
+SELECT octet_length(secp256k1_tagged_sha256('binary_test', from_hex('deadbeef')));
+----
+32
+
+# Test secp256k1_tagged_sha256 with NULL tag (should return NULL)
+query I
+SELECT secp256k1_tagged_sha256(NULL, 'message');
+----
+NULL
+
+# Test secp256k1_tagged_sha256 with NULL message (should return NULL)
+query I
+SELECT secp256k1_tagged_sha256('tag', NULL);
+----
+NULL
+
+# Test secp256k1_tagged_sha256 with both NULL inputs (should return NULL)
+query I
+SELECT secp256k1_tagged_sha256(NULL, NULL);
+----
+NULL

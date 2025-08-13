@@ -214,6 +214,52 @@ inline void MinOutpointScalarFun(DataChunk &args, ExpressionState &state, Vector
 	}
 }
 
+// Function to compute secp256k1 tagged SHA256 hash
+inline void Secp256k1TaggedSha256ScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 2);
+	
+	// Get the secp256k1 context
+	secp256k1_context *ctx = GetSecp256k1Context();
+	
+	auto &tag_vector = args.data[0];
+	auto &msg_vector = args.data[1];
+	
+	// Get number of rows to process
+	idx_t count = args.size();
+	
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		// Check if either input is NULL
+		if (FlatVector::IsNull(tag_vector, i) || FlatVector::IsNull(msg_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Get the tag data
+		auto tag_data = FlatVector::GetData<string_t>(tag_vector)[i];
+		// Get the message data
+		auto msg_data = FlatVector::GetData<string_t>(msg_vector)[i];
+		
+		// Create output buffer for 32-byte hash
+		unsigned char hash32[32];
+		
+		// Call secp256k1_tagged_sha256
+		int result_code = secp256k1_tagged_sha256(ctx, hash32,
+			(const unsigned char*)tag_data.GetDataUnsafe(), tag_data.GetSize(),
+			(const unsigned char*)msg_data.GetDataUnsafe(), msg_data.GetSize());
+		
+		if (result_code != 1) {
+			// Set result to NULL if hashing failed (though this should always succeed)
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Create the result blob
+		string_t result_blob = StringVector::AddStringOrBlob(result, (const char*)hash32, 32);
+		FlatVector::GetData<string_t>(result)[i] = result_blob;
+	}
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts variable arguments
 	ScalarFunctionSet secp256k1_ec_pubkey_combine_function_set("secp256k1_ec_pubkey_combine");
@@ -253,6 +299,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	}
 	
 	ExtensionUtil::RegisterFunction(instance, min_outpoint_function_set);
+	
+	// Register the secp256k1_tagged_sha256 function
+	auto secp256k1_tagged_sha256_function = ScalarFunction("secp256k1_tagged_sha256", 
+		{LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB, Secp256k1TaggedSha256ScalarFun);
+	ExtensionUtil::RegisterFunction(instance, secp256k1_tagged_sha256_function);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {
