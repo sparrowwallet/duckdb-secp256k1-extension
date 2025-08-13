@@ -260,6 +260,77 @@ inline void Secp256k1TaggedSha256ScalarFun(DataChunk &args, ExpressionState &sta
 	}
 }
 
+// Function to tweak a public key by scalar multiplication
+inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 2);
+	
+	// Get the secp256k1 context
+	secp256k1_context *ctx = GetSecp256k1Context();
+	
+	auto &pubkey_vector = args.data[0];
+	auto &tweak_vector = args.data[1];
+	
+	// Get number of rows to process
+	idx_t count = args.size();
+	
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		// Check if either input is NULL
+		if (FlatVector::IsNull(pubkey_vector, i) || FlatVector::IsNull(tweak_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Get the public key data
+		auto pubkey_data = FlatVector::GetData<string_t>(pubkey_vector)[i];
+		// Get the tweak data
+		auto tweak_data = FlatVector::GetData<string_t>(tweak_vector)[i];
+		
+		// Validate that the public key is exactly 33 bytes (compressed format)
+		if (pubkey_data.GetSize() != 33) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Validate that the tweak is exactly 32 bytes
+		if (tweak_data.GetSize() != 32) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Parse the public key
+		secp256k1_pubkey pubkey;
+		const unsigned char *pubkey_input = reinterpret_cast<const unsigned char*>(pubkey_data.GetDataUnsafe());
+		
+		if (secp256k1_ec_pubkey_parse(ctx, &pubkey, pubkey_input, 33) != 1) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Apply the scalar tweak
+		const unsigned char *tweak32 = reinterpret_cast<const unsigned char*>(tweak_data.GetDataUnsafe());
+		
+		if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, tweak32) != 1) {
+			// Tweak failed (invalid tweak or resulting point at infinity)
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Serialize the tweaked public key back to compressed format (33 bytes)
+		unsigned char output[33];
+		size_t output_len = 33;
+		
+		if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Create the result blob
+		string_t result_blob = StringVector::AddStringOrBlob(result, (const char*)output, 33);
+		FlatVector::GetData<string_t>(result)[i] = result_blob;
+	}
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts variable arguments
 	ScalarFunctionSet secp256k1_ec_pubkey_combine_function_set("secp256k1_ec_pubkey_combine");
@@ -304,6 +375,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto secp256k1_tagged_sha256_function = ScalarFunction("secp256k1_tagged_sha256", 
 		{LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB, Secp256k1TaggedSha256ScalarFun);
 	ExtensionUtil::RegisterFunction(instance, secp256k1_tagged_sha256_function);
+	
+	// Register the secp256k1_ec_pubkey_tweak_mul function
+	auto secp256k1_ec_pubkey_tweak_mul_function = ScalarFunction("secp256k1_ec_pubkey_tweak_mul", 
+		{LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB, Secp256k1EcPubkeyTweakMulScalarFun);
+	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_tweak_mul_function);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {

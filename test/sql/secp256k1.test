@@ -184,3 +184,63 @@ query I
 SELECT secp256k1_tagged_sha256(NULL, NULL);
 ----
 NULL
+
+# Test secp256k1_ec_pubkey_tweak_mul basic functionality
+query I
+SELECT octet_length(secp256k1_ec_pubkey_tweak_mul(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('0000000000000000000000000000000000000000000000000000000000000002')
+));
+----
+33
+
+# Test secp256k1_ec_pubkey_tweak_mul identity tweak (multiply by 1)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('0000000000000000000000000000000000000000000000000000000000000001')
+) = from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+----
+true
+
+# Test secp256k1_ec_pubkey_tweak_mul different tweaks produce different results
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('0000000000000000000000000000000000000000000000000000000000000002')
+) != secp256k1_ec_pubkey_tweak_mul(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('0000000000000000000000000000000000000000000000000000000000000003')
+);
+----
+true
+
+# Test secp256k1_ec_pubkey_tweak_mul with NULL pubkey (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(NULL, from_hex('0000000000000000000000000000000000000000000000000000000000000001'));
+----
+NULL
+
+# Test secp256k1_ec_pubkey_tweak_mul with NULL tweak (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), NULL);
+----
+NULL
+
+# Test secp256k1_ec_pubkey_tweak_mul with wrong pubkey length (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), from_hex('0000000000000000000000000000000000000000000000000000000000000001'));
+----
+NULL
+
+# Test secp256k1_ec_pubkey_tweak_mul with wrong tweak length (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('00000000000000000000000000000000000000000000000000000000000001'));
+----
+NULL
+
+# Test secp256k1_ec_pubkey_tweak_mul with zero tweak (should return NULL - invalid)
+query I
+SELECT secp256k1_ec_pubkey_tweak_mul(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('0000000000000000000000000000000000000000000000000000000000000000'));
+----
+NULL
