@@ -244,3 +244,57 @@ query I
 SELECT secp256k1_ec_pubkey_tweak_mul(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('0000000000000000000000000000000000000000000000000000000000000000'));
 ----
 NULL
+
+# Test int_to_big_endian basic functionality
+query I
+SELECT octet_length(int_to_big_endian(123));
+----
+4
+
+# Test int_to_big_endian with zero
+query I
+SELECT int_to_big_endian(0) = from_hex('00000000');
+----
+true
+
+# Test int_to_big_endian with one (big-endian format)
+query I
+SELECT int_to_big_endian(1) = from_hex('00000001');
+----
+true
+
+# Test int_to_big_endian with 256 (big-endian format)
+query I
+SELECT int_to_big_endian(256) = from_hex('00000100');
+----
+true
+
+# Test int_to_big_endian with 65536 (big-endian format)
+query I
+SELECT int_to_big_endian(65536) = from_hex('00010000');
+----
+true
+
+# Test int_to_big_endian with negative number (two's complement)
+query I
+SELECT int_to_big_endian(-1) = from_hex('FFFFFFFF');
+----
+true
+
+# Test int_to_big_endian with max 32-bit signed integer
+query I
+SELECT int_to_big_endian(2147483647) = from_hex('7FFFFFFF');
+----
+true
+
+# Test int_to_big_endian with min 32-bit signed integer  
+query I
+SELECT int_to_big_endian(-2147483648) = from_hex('80000000');
+----
+true
+
+# Test int_to_big_endian with NULL input (should return NULL)
+query I
+SELECT int_to_big_endian(NULL);
+----
+NULL

@@ -331,6 +331,41 @@ inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState 
 	}
 }
 
+// Function to convert an integer to a 4-byte blob in big-endian format (MSB first)
+inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 1);
+	
+	auto &int_vector = args.data[0];
+	
+	// Get number of rows to process
+	idx_t count = args.size();
+	
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		// Check if input is NULL
+		if (FlatVector::IsNull(int_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Get the integer value
+		auto int_value = FlatVector::GetData<int32_t>(int_vector)[i];
+		
+		// Create output buffer (4 bytes)
+		unsigned char output[4];
+		
+		// Store the integer in big-endian format (most significant byte first)
+		output[0] = (unsigned char)((int_value >> 24) & 0xFF);  // MSB
+		output[1] = (unsigned char)((int_value >> 16) & 0xFF);
+		output[2] = (unsigned char)((int_value >> 8) & 0xFF);
+		output[3] = (unsigned char)(int_value & 0xFF);          // LSB
+		
+		// Create the result blob
+		string_t result_blob = StringVector::AddStringOrBlob(result, (const char*)output, 4);
+		FlatVector::GetData<string_t>(result)[i] = result_blob;
+	}
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts variable arguments
 	ScalarFunctionSet secp256k1_ec_pubkey_combine_function_set("secp256k1_ec_pubkey_combine");
@@ -380,6 +415,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto secp256k1_ec_pubkey_tweak_mul_function = ScalarFunction("secp256k1_ec_pubkey_tweak_mul", 
 		{LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB, Secp256k1EcPubkeyTweakMulScalarFun);
 	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_tweak_mul_function);
+	
+	// Register the integer to big-endian function
+	auto int_to_big_endian_function = ScalarFunction("int_to_big_endian", 
+		{LogicalType::INTEGER}, LogicalType::BLOB, IntegerToBigEndianScalarFun);
+	ExtensionUtil::RegisterFunction(instance, int_to_big_endian_function);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {
