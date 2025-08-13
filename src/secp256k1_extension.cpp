@@ -163,6 +163,57 @@ inline void CreateOutpointScalarFun(DataChunk &args, ExpressionState &state, Vec
 	}
 }
 
+// Function to find the lexicographically smallest 36-byte blob
+inline void MinOutpointScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Get number of rows to process
+	idx_t count = args.size();
+	
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		string_t min_blob;
+		bool found_valid = false;
+		
+		// Check all input arguments for this row
+		for (idx_t col = 0; col < args.ColumnCount(); col++) {
+			auto &input_vector = args.data[col];
+			
+			// Check if this column value is NULL
+			if (FlatVector::IsNull(input_vector, i)) {
+				continue;
+			}
+			
+			// Get the blob data
+			auto blob_data = FlatVector::GetData<string_t>(input_vector)[i];
+			
+			// Validate that the blob is exactly 36 bytes
+			if (blob_data.GetSize() != 36) {
+				continue;
+			}
+			
+			// If this is the first valid blob, use it as the minimum
+			if (!found_valid) {
+				min_blob = blob_data;
+				found_valid = true;
+			} else {
+				// Compare lexicographically (memcmp does lexicographic comparison for bytes)
+				if (memcmp(blob_data.GetDataUnsafe(), min_blob.GetDataUnsafe(), 36) < 0) {
+					min_blob = blob_data;
+				}
+			}
+		}
+		
+		if (!found_valid) {
+			// Set result to NULL if no valid 36-byte blobs found
+			FlatVector::SetNull(result, i, true);
+		} else {
+			// Create the result blob by copying the minimum blob
+			string_t result_blob = StringVector::AddStringOrBlob(result, 
+				(const char*)min_blob.GetDataUnsafe(), 36);
+			FlatVector::GetData<string_t>(result)[i] = result_blob;
+		}
+	}
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts variable arguments
 	ScalarFunctionSet secp256k1_ec_pubkey_combine_function_set("secp256k1_ec_pubkey_combine");
@@ -185,6 +236,23 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto create_outpoint_function = ScalarFunction("create_outpoint", 
 		{LogicalType::BLOB, LogicalType::INTEGER}, LogicalType::BLOB, CreateOutpointScalarFun);
 	ExtensionUtil::RegisterFunction(instance, create_outpoint_function);
+	
+	// Register the min_outpoint function that accepts variable arguments
+	ScalarFunctionSet min_outpoint_function_set("min_outpoint");
+	
+	// Add overloads for different numbers of arguments (2-10 outpoints)
+	for (idx_t num_args = 2; num_args <= 10; num_args++) {
+		vector<LogicalType> arg_types;
+		for (idx_t i = 0; i < num_args; i++) {
+			arg_types.push_back(LogicalType::BLOB);
+		}
+		
+		min_outpoint_function_set.AddFunction(ScalarFunction(
+			arg_types, LogicalType::BLOB, MinOutpointScalarFun
+		));
+	}
+	
+	ExtensionUtil::RegisterFunction(instance, min_outpoint_function_set);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {

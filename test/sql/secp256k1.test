@@ -102,3 +102,37 @@ query I
 SELECT create_outpoint(from_hex('00000000000000000000000000000000000000000000000000000000000000'), 1);
 ----
 NULL
+
+# Test min_outpoint function with two outpoints
+query I
+SELECT min_outpoint(
+    create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 2),
+    create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1)
+) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
+----
+true
+
+# Test min_outpoint with three outpoints (different hash prefixes)
+query I
+SELECT min_outpoint(
+    create_outpoint(from_hex('1000000000000000000000000000000000000000000000000000000000000000'), 0),
+    create_outpoint(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0),
+    create_outpoint(from_hex('2000000000000000000000000000000000000000000000000000000000000000'), 0)
+) = create_outpoint(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0);
+----
+true
+
+# Test min_outpoint with all NULL inputs (should return NULL)
+query I
+SELECT min_outpoint(NULL, NULL);
+----
+NULL
+
+# Test min_outpoint with wrong length input (ignores invalid, returns valid)
+query I
+SELECT min_outpoint(
+    from_hex('00000000000000000000000000000000000000000000000000000000000000000'),  -- 33 bytes (wrong)
+    create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1)
+) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
+----
+true
