@@ -1,10 +1,10 @@
-# Quack
+# DuckDB secp256k1 Extension
 
 This repository is based on https://github.com/duckdb/extension-template, check it out if you want to build and ship your own DuckDB extension.
 
 ---
 
-This extension, Quack, allow you to ... <extension_goal>.
+This extension provides secp256k1 cryptographic functions for DuckDB, allowing elliptic curve operations directly in SQL queries.
 
 
 ## Building
@@ -26,24 +26,26 @@ The main binaries that will be built are:
 ```sh
 ./build/release/duckdb
 ./build/release/test/unittest
-./build/release/extension/quack/quack.duckdb_extension
+./build/release/extension/secp256k1/secp256k1.duckdb_extension
 ```
 - `duckdb` is the binary for the duckdb shell with the extension code automatically loaded.
 - `unittest` is the test runner of duckdb. Again, the extension is already linked into the binary.
-- `quack.duckdb_extension` is the loadable binary as it would be distributed.
+- `secp256k1.duckdb_extension` is the loadable binary as it would be distributed.
 
 ## Running the extension
 To run the extension code, simply start the shell with `./build/release/duckdb`.
 
-Now we can use the features from the extension directly in DuckDB. The template contains a single scalar function `quack()` that takes a string arguments and returns a string:
+Now we can use the secp256k1 cryptographic functions directly in DuckDB. The extension provides functions like `secp256k1_ec_pubkey_combine()` for combining elliptic curve public keys:
 ```
-D select quack('Jane') as result;
-┌───────────────┐
-│    result     │
-│    varchar    │
-├───────────────┤
-│ Quack Jane 🐥 │
-└───────────────┘
+D SELECT secp256k1_ec_pubkey_combine(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5')
+  ) IS NOT NULL as combined_successfully;
+┌─────────────────────┐
+│ combined_successfully │
+├─────────────────────┤
+│ true                │
+└─────────────────────┘
 ```
 
 ## Running the tests
@@ -81,6 +83,6 @@ DuckDB. To specify a specific version, you can pass the version instead.
 
 After running these steps, you can install and load your extension using the regular INSTALL/LOAD commands in DuckDB:
 ```sql
-INSTALL quack
-LOAD quack
+INSTALL secp256k1
+LOAD secp256k1
 ```

@@ -46,15 +46,18 @@ GEN=ninja make
 ## Running the extension
 To run the extension code, simply start the shell with `./build/release/duckdb`. This shell will have the extension pre-loaded.  
 
-Now we can use the features from the extension directly in DuckDB. The template contains a single scalar function `quack()` that takes a string arguments and returns a string:
+Now we can use the features from the extension directly in DuckDB. This extension contains the secp256k1 cryptographic functions, including `secp256k1_ec_pubkey_combine()` that combines multiple public keys:
 ```
-D select quack('Jane') as result;
-┌───────────────┐
-│    result     │
-│    varchar    │
-├───────────────┤
-│ Quack Jane 🐥 │
-└───────────────┘
+D LOAD 'secp256k1';
+D SELECT secp256k1_ec_pubkey_combine(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5')
+  ) IS NOT NULL as combined_successfully;
+┌─────────────────────┐
+│ combined_successfully │
+├─────────────────────┤
+│ true                │
+└─────────────────────┘
 ```
 
 ## Running the tests

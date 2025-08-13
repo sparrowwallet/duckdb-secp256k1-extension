@@ -1,0 +1,104 @@
+# name: test/sql/secp256k1.test
+# description: test secp256k1 extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT secp256k1_ec_pubkey_combine(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'));
+----
+Catalog Error: Scalar Function with name secp256k1_ec_pubkey_combine does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require secp256k1
+
+# Test combining two valid compressed public keys
+# Using secp256k1 generator point (0279be...) and another valid compressed pubkey
+query I
+SELECT secp256k1_ec_pubkey_combine(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5')
+) IS NOT NULL;
+----
+true
+
+# Test combining three public keys
+query I
+SELECT secp256k1_ec_pubkey_combine(
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
+    from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'),
+    from_hex('03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb')
+) IS NOT NULL;
+----
+true
+
+# Test with NULL input (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_combine(NULL, from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+----
+NULL
+
+# Test with invalid length input (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_combine(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+----
+NULL
+
+# Test with invalid public key data (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_combine(from_hex('0000000000000000000000000000000000000000000000000000000000000000000'), from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+----
+NULL
+
+# Test create_outpoint function with 32-byte blob and integer
+query I
+SELECT octet_length(create_outpoint(
+    from_hex('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
+    1
+));
+----
+36
+
+# Test create_outpoint with zero integer (little-endian encoding)
+query I
+SELECT create_outpoint(
+    from_hex('0000000000000000000000000000000000000000000000000000000000000000'),
+    0
+) = from_hex('000000000000000000000000000000000000000000000000000000000000000000000000');
+----
+true
+
+# Test create_outpoint with integer 1 (little-endian encoding)
+query I
+SELECT create_outpoint(
+    from_hex('0000000000000000000000000000000000000000000000000000000000000000'),
+    1
+) = from_hex('000000000000000000000000000000000000000000000000000000000000000001000000');
+----
+true
+
+# Test create_outpoint with integer 256 (little-endian encoding)
+query I
+SELECT create_outpoint(
+    from_hex('0000000000000000000000000000000000000000000000000000000000000000'),
+    256
+) = from_hex('000000000000000000000000000000000000000000000000000000000000000000010000');
+----
+true
+
+# Test create_outpoint with NULL blob (should return NULL)
+query I
+SELECT create_outpoint(NULL, 1);
+----
+NULL
+
+# Test create_outpoint with NULL integer (should return NULL)
+query I
+SELECT create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), NULL);
+----
+NULL
+
+# Test create_outpoint with wrong blob length (should return NULL)
+query I
+SELECT create_outpoint(from_hex('00000000000000000000000000000000000000000000000000000000000000'), 1);
+----
+NULL
