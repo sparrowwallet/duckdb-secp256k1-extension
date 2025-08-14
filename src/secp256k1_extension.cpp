@@ -168,8 +168,11 @@ inline void CreateOutpointScalarFun(DataChunk &args, ExpressionState &state, Vec
 		// Create output buffer (32 bytes + 4 bytes = 36 bytes)
 		unsigned char output[36];
 
-		// Copy the 32-byte blob
-		memcpy(output, blob_data.GetDataUnsafe(), 32);
+		// Copy the 32-byte blob in reverse order (big-endian to little-endian)
+		const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
+		for (int j = 0; j < 32; j++) {
+			output[j] = input_data[31 - j];
+		}
 
 		// Append the 4-byte integer in little-endian format
 		output[32] = (unsigned char)(int_value & 0xFF);
