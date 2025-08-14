@@ -25,6 +25,11 @@ add_definitions(-DUSE_FIELD_10X26)
 add_definitions(-DUSE_SCALAR_8X32)
 add_definitions(-DENABLE_MODULE_ECDH)
 
+# Windows-specific definitions for static linking
+if(WIN32)
+    add_definitions(-DSECP256K1_STATIC)
+endif()
+
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 

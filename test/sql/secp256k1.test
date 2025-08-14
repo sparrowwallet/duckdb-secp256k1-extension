@@ -4,7 +4,7 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT secp256k1_ec_pubkey_combine(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'));
+SELECT secp256k1_ec_pubkey_combine([from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5')]);
 ----
 Catalog Error: Scalar Function with name secp256k1_ec_pubkey_combine does not exist!
 
@@ -14,38 +14,44 @@ require secp256k1
 # Test combining two valid compressed public keys
 # Using secp256k1 generator point (0279be...) and another valid compressed pubkey
 query I
-SELECT secp256k1_ec_pubkey_combine(
+SELECT secp256k1_ec_pubkey_combine([
     from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
     from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5')
-) IS NOT NULL;
+]) IS NOT NULL;
 ----
 true
 
 # Test combining three public keys
 query I
-SELECT secp256k1_ec_pubkey_combine(
+SELECT secp256k1_ec_pubkey_combine([
     from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
     from_hex('02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'),
     from_hex('03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb')
-) IS NOT NULL;
+]) IS NOT NULL;
 ----
 true
 
 # Test with NULL input (should return NULL)
 query I
-SELECT secp256k1_ec_pubkey_combine(NULL, from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+SELECT secp256k1_ec_pubkey_combine(NULL);
 ----
 NULL
 
 # Test with invalid length input (should return NULL)
 query I
-SELECT secp256k1_ec_pubkey_combine(from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+SELECT secp256k1_ec_pubkey_combine([
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), 
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798')
+]);
 ----
 NULL
 
 # Test with invalid public key data (should return NULL)
 query I
-SELECT secp256k1_ec_pubkey_combine(from_hex('0000000000000000000000000000000000000000000000000000000000000000000'), from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'));
+SELECT secp256k1_ec_pubkey_combine([
+    from_hex('0000000000000000000000000000000000000000000000000000000000000000000'), 
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798')
+]);
 ----
 NULL
 
@@ -105,35 +111,35 @@ NULL
 
 # Test min_outpoint function with two outpoints
 query I
-SELECT min_outpoint(
+SELECT min_outpoint([
     create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 2),
     create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1)
-) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
+]) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
 ----
 true
 
 # Test min_outpoint with three outpoints (different hash prefixes)
 query I
-SELECT min_outpoint(
+SELECT min_outpoint([
     create_outpoint(from_hex('1000000000000000000000000000000000000000000000000000000000000000'), 0),
     create_outpoint(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0),
     create_outpoint(from_hex('2000000000000000000000000000000000000000000000000000000000000000'), 0)
-) = create_outpoint(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0);
+]) = create_outpoint(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0);
 ----
 true
 
 # Test min_outpoint with all NULL inputs (should return NULL)
 query I
-SELECT min_outpoint(NULL, NULL);
+SELECT min_outpoint(NULL);
 ----
 NULL
 
 # Test min_outpoint with wrong length input (ignores invalid, returns valid)
 query I
-SELECT min_outpoint(
+SELECT min_outpoint([
     from_hex('00000000000000000000000000000000000000000000000000000000000000000'),  -- 33 bytes (wrong)
     create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1)
-) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
+]) = create_outpoint(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 1);
 ----
 true
 

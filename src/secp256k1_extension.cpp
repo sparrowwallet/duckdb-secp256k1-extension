@@ -36,31 +36,51 @@ inline void Secp256k1EcPubkeyCombineScalarFun(DataChunk &args, ExpressionState &
 	// Get the secp256k1 context
 	secp256k1_context *ctx = GetSecp256k1Context();
 	
-	// The function takes a variable number of BLOB arguments (each 33 bytes for compressed pubkeys)
-	D_ASSERT(args.ColumnCount() >= 1);
+	// The function takes a single LIST argument containing BLOB elements (each 33 bytes for compressed pubkeys)
+	D_ASSERT(args.ColumnCount() == 1);
+	
+	auto &list_vector = args.data[0];
 	
 	// Get number of rows to process
 	idx_t count = args.size();
 	
 	// Process each row
 	for (idx_t i = 0; i < count; i++) {
+		// Check if the list is NULL
+		if (FlatVector::IsNull(list_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Get the list data for this row
+		auto list_data = FlatVector::GetData<list_entry_t>(list_vector)[i];
+		
+		// Get the child vector (contains the actual BLOB elements)
+		auto &child_vector = ListVector::GetEntry(list_vector);
+		
 		std::vector<secp256k1_pubkey> parsed_pubkeys;
 		std::vector<const secp256k1_pubkey*> pubkey_ptrs;
 		
 		bool all_valid = true;
 		
-		// Parse all input public keys for this row
-		for (idx_t col = 0; col < args.ColumnCount(); col++) {
-			auto &input_vector = args.data[col];
+		// Check if list is empty
+		if (list_data.length == 0) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Parse all public keys in the list for this row
+		for (idx_t j = 0; j < list_data.length; j++) {
+			idx_t child_idx = list_data.offset + j;
 			
-			// Check if this column value is NULL
-			if (FlatVector::IsNull(input_vector, i)) {
+			// Check if this list element is NULL
+			if (FlatVector::IsNull(child_vector, child_idx)) {
 				all_valid = false;
 				break;
 			}
 			
 			// Get the blob data
-			auto blob_data = FlatVector::GetData<string_t>(input_vector)[i];
+			auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
 			
 			// Validate that the blob is exactly 33 bytes (compressed pubkey format)
 			if (blob_data.GetSize() != 33) {
@@ -165,25 +185,48 @@ inline void CreateOutpointScalarFun(DataChunk &args, ExpressionState &state, Vec
 
 // Function to find the lexicographically smallest 36-byte blob
 inline void MinOutpointScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	// The function takes a single LIST argument containing BLOB elements (each 36 bytes for outpoints)
+	D_ASSERT(args.ColumnCount() == 1);
+	
+	auto &list_vector = args.data[0];
+	
 	// Get number of rows to process
 	idx_t count = args.size();
 	
 	// Process each row
 	for (idx_t i = 0; i < count; i++) {
+		// Check if the list is NULL
+		if (FlatVector::IsNull(list_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Get the list data for this row
+		auto list_data = FlatVector::GetData<list_entry_t>(list_vector)[i];
+		
+		// Get the child vector (contains the actual BLOB elements)
+		auto &child_vector = ListVector::GetEntry(list_vector);
+		
 		string_t min_blob;
 		bool found_valid = false;
 		
-		// Check all input arguments for this row
-		for (idx_t col = 0; col < args.ColumnCount(); col++) {
-			auto &input_vector = args.data[col];
+		// Check if list is empty
+		if (list_data.length == 0) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		
+		// Check all blobs in the list for this row
+		for (idx_t j = 0; j < list_data.length; j++) {
+			idx_t child_idx = list_data.offset + j;
 			
-			// Check if this column value is NULL
-			if (FlatVector::IsNull(input_vector, i)) {
+			// Check if this list element is NULL
+			if (FlatVector::IsNull(child_vector, child_idx)) {
 				continue;
 			}
 			
 			// Get the blob data
-			auto blob_data = FlatVector::GetData<string_t>(input_vector)[i];
+			auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
 			
 			// Validate that the blob is exactly 36 bytes
 			if (blob_data.GetSize() != 36) {
@@ -367,44 +410,20 @@ inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state,
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
-	// Register the secp256k1_ec_pubkey_combine function that accepts variable arguments
-	ScalarFunctionSet secp256k1_ec_pubkey_combine_function_set("secp256k1_ec_pubkey_combine");
-	
-	// Add overloads for different numbers of arguments (2-10 public keys)
-	for (idx_t num_args = 2; num_args <= 10; num_args++) {
-		vector<LogicalType> arg_types;
-		for (idx_t i = 0; i < num_args; i++) {
-			arg_types.push_back(LogicalType::BLOB);
-		}
-		
-		secp256k1_ec_pubkey_combine_function_set.AddFunction(ScalarFunction(
-			arg_types, LogicalType::BLOB, Secp256k1EcPubkeyCombineScalarFun
-		));
-	}
-	
-	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_combine_function_set);
+	// Register the secp256k1_ec_pubkey_combine function that accepts an array of blobs
+	auto secp256k1_ec_pubkey_combine_function = ScalarFunction("secp256k1_ec_pubkey_combine",
+		{LogicalType::LIST(LogicalType::BLOB)}, LogicalType::BLOB, Secp256k1EcPubkeyCombineScalarFun);
+	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_combine_function);
 	
 	// Register the create_outpoint function
 	auto create_outpoint_function = ScalarFunction("create_outpoint", 
 		{LogicalType::BLOB, LogicalType::INTEGER}, LogicalType::BLOB, CreateOutpointScalarFun);
 	ExtensionUtil::RegisterFunction(instance, create_outpoint_function);
 	
-	// Register the min_outpoint function that accepts variable arguments
-	ScalarFunctionSet min_outpoint_function_set("min_outpoint");
-	
-	// Add overloads for different numbers of arguments (2-10 outpoints)
-	for (idx_t num_args = 2; num_args <= 10; num_args++) {
-		vector<LogicalType> arg_types;
-		for (idx_t i = 0; i < num_args; i++) {
-			arg_types.push_back(LogicalType::BLOB);
-		}
-		
-		min_outpoint_function_set.AddFunction(ScalarFunction(
-			arg_types, LogicalType::BLOB, MinOutpointScalarFun
-		));
-	}
-	
-	ExtensionUtil::RegisterFunction(instance, min_outpoint_function_set);
+	// Register the min_outpoint function that accepts an array of blobs
+	auto min_outpoint_function = ScalarFunction("min_outpoint",
+		{LogicalType::LIST(LogicalType::BLOB)}, LogicalType::BLOB, MinOutpointScalarFun);
+	ExtensionUtil::RegisterFunction(instance, min_outpoint_function);
 	
 	// Register the secp256k1_tagged_sha256 function
 	auto secp256k1_tagged_sha256_function = ScalarFunction("secp256k1_tagged_sha256", 
