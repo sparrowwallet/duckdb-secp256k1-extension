@@ -304,3 +304,57 @@ query I
 SELECT int_to_big_endian(NULL);
 ----
 NULL
+
+# Test secp256k1_ec_pubkey_create basic functionality
+query I
+SELECT octet_length(secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')));
+----
+33
+
+# Test secp256k1_ec_pubkey_create with known test vector (private key = 1)
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) = from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+----
+true
+
+# Test secp256k1_ec_pubkey_create with another test vector (private key = 2)
+query I
+SELECT octet_length(secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')));
+----
+33
+
+# Test secp256k1_ec_pubkey_create with different private keys produces different public keys
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) != secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002'));
+----
+true
+
+# Test secp256k1_ec_pubkey_create with NULL input (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_create(NULL);
+----
+NULL
+
+# Test secp256k1_ec_pubkey_create with wrong length input (should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('000000000000000000000000000000000000000000000000000000000000000'));
+----
+NULL
+
+# Test secp256k1_ec_pubkey_create with zero private key (should return NULL - invalid)
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000000'));
+----
+NULL
+
+# Test secp256k1_ec_pubkey_create with max valid private key (n-1 where n is secp256k1 order)
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364140')) IS NOT NULL;
+----
+true
+
+# Test secp256k1_ec_pubkey_create with invalid private key (secp256k1 order, should return NULL)
+query I
+SELECT secp256k1_ec_pubkey_create(from_hex('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141'));
+----
+NULL

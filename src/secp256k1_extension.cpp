@@ -373,6 +373,60 @@ inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState 
 	}
 }
 
+// Function to create a public key from a secret key using secp256k1_ec_pubkey_create
+inline void Secp256k1EcPubkeyCreateScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 1);
+
+	// Get the secp256k1 context
+	secp256k1_context *ctx = GetSecp256k1Context();
+
+	auto &seckey_vector = args.data[0];
+
+	// Get number of rows to process
+	idx_t count = args.size();
+
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		// Check if input is NULL
+		if (FlatVector::IsNull(seckey_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Get the secret key data
+		auto seckey_data = FlatVector::GetData<string_t>(seckey_vector)[i];
+
+		// Validate that the secret key is exactly 32 bytes
+		if (seckey_data.GetSize() != 32) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Create the public key
+		secp256k1_pubkey pubkey;
+		const unsigned char *seckey32 = reinterpret_cast<const unsigned char *>(seckey_data.GetDataUnsafe());
+
+		if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey32) != 1) {
+			// Secret key is invalid (zero, out of range, etc.)
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Serialize the public key to compressed format (33 bytes)
+		unsigned char output[33];
+		size_t output_len = 33;
+
+		if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Create the result blob
+		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 33);
+		FlatVector::GetData<string_t>(result)[i] = result_blob;
+	}
+}
+
 // Function to convert an integer to a 4-byte blob in big-endian format (MSB first)
 inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 1);
@@ -436,6 +490,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	    ScalarFunction("secp256k1_ec_pubkey_tweak_mul", {LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB,
 	                   Secp256k1EcPubkeyTweakMulScalarFun);
 	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_tweak_mul_function);
+
+	// Register the secp256k1_ec_pubkey_create function
+	auto secp256k1_ec_pubkey_create_function = ScalarFunction("secp256k1_ec_pubkey_create", {LogicalType::BLOB},
+	                                                          LogicalType::BLOB, Secp256k1EcPubkeyCreateScalarFun);
+	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_create_function);
 
 	// Register the integer to big-endian function
 	auto int_to_big_endian_function =
