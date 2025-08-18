@@ -430,6 +430,47 @@ inline void Secp256k1EcPubkeyCreateScalarFun(DataChunk &args, ExpressionState &s
 	}
 }
 
+// Function to convert a 32-byte blob to a ubigint with most significant byte first
+inline void HashPrefixToIntScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 1);
+
+	auto &blob_vector = args.data[0];
+
+	// Get number of rows to process
+	idx_t count = args.size();
+
+	// Process each row
+	for (idx_t i = 0; i < count; i++) {
+		// Check if input is NULL
+		if (FlatVector::IsNull(blob_vector, i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Get the blob data
+		auto blob_data = FlatVector::GetData<string_t>(blob_vector)[i];
+
+		// Validate that the blob is exactly 32 bytes
+		if (blob_data.GetSize() != 32) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		// Get the input data as unsigned char array
+		const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
+
+		// Convert to ubigint (big-endian, most significant byte first)
+		// Take the first 8 bytes of the hash as the most significant bytes
+		uint64_t result_value = 0;
+		for (int j = 0; j < 8; j++) {
+			result_value = (result_value << 8) | input_data[j];
+		}
+
+		// Set the result
+		FlatVector::GetData<uint64_t>(result)[i] = result_value;
+	}
+}
+
 // Function to convert an integer to a 4-byte blob in big-endian format (MSB first)
 inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 1);
@@ -498,6 +539,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto secp256k1_ec_pubkey_create_function = ScalarFunction("secp256k1_ec_pubkey_create", {LogicalType::BLOB},
 	                                                          LogicalType::BLOB, Secp256k1EcPubkeyCreateScalarFun);
 	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_create_function);
+
+	// Register the hash prefix to integer function
+	auto hash_prefix_to_int_function =
+	    ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB}, LogicalType::UBIGINT, HashPrefixToIntScalarFun);
+	ExtensionUtil::RegisterFunction(instance, hash_prefix_to_int_function);
 
 	// Register the integer to big-endian function
 	auto int_to_big_endian_function =

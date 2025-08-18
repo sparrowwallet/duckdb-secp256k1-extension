@@ -305,6 +305,42 @@ SELECT int_to_big_endian(NULL);
 ----
 NULL
 
+# Test hash_prefix_to_int basic functionality (takes first 8 bytes as MSB)
+query I
+SELECT hash_prefix_to_int(from_hex('0000000000000001000000000000000000000000000000000000000000000000'));
+----
+1
+
+# Test hash_prefix_to_int with zero input
+query I
+SELECT hash_prefix_to_int(from_hex('0000000000000000000000000000000000000000000000000000000000000000'));
+----
+0
+
+# Test hash_prefix_to_int with max 8-byte value (big-endian)
+query I
+SELECT hash_prefix_to_int(from_hex('FFFFFFFFFFFFFFFF000000000000000000000000000000000000000000000000'));
+----
+18446744073709551615
+
+# Test hash_prefix_to_int with small value in MSB position
+query I
+SELECT hash_prefix_to_int(from_hex('0100000000000000000000000000000000000000000000000000000000000000'));
+----
+72057594037927936
+
+# Test hash_prefix_to_int with NULL input (should return NULL)
+query I
+SELECT hash_prefix_to_int(NULL);
+----
+NULL
+
+# Test hash_prefix_to_int with wrong length input (should return NULL)
+query I
+SELECT hash_prefix_to_int(from_hex('00000000000000000000000000000000000000000000000000000000000000'));
+----
+NULL
+
 # Test secp256k1_ec_pubkey_create basic functionality
 query I
 SELECT octet_length(secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')));
