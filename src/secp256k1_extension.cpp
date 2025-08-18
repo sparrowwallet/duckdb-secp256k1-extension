@@ -459,15 +459,15 @@ inline void HashPrefixToIntScalarFun(DataChunk &args, ExpressionState &state, Ve
 		// Get the input data as unsigned char array
 		const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
 
-		// Convert to ubigint (big-endian, most significant byte first)
+		// Convert to bigint (big-endian, most significant byte first)
 		// Take the first 8 bytes of the hash as the most significant bytes
-		uint64_t result_value = 0;
+		int64_t result_value = 0;
 		for (int j = 0; j < 8; j++) {
 			result_value = (result_value << 8) | input_data[j];
 		}
 
 		// Set the result
-		FlatVector::GetData<uint64_t>(result)[i] = result_value;
+		FlatVector::GetData<int64_t>(result)[i] = result_value;
 	}
 }
 
@@ -542,7 +542,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// Register the hash prefix to integer function
 	auto hash_prefix_to_int_function =
-	    ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB}, LogicalType::UBIGINT, HashPrefixToIntScalarFun);
+	    ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB}, LogicalType::BIGINT, HashPrefixToIntScalarFun);
 	ExtensionUtil::RegisterFunction(instance, hash_prefix_to_int_function);
 
 	// Register the integer to big-endian function

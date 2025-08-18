@@ -321,7 +321,7 @@ SELECT hash_prefix_to_int(from_hex('00000000000000000000000000000000000000000000
 query I
 SELECT hash_prefix_to_int(from_hex('FFFFFFFFFFFFFFFF000000000000000000000000000000000000000000000000'));
 ----
-18446744073709551615
+-1
 
 # Test hash_prefix_to_int with small value in MSB position
 query I
