@@ -432,3 +432,35 @@ SELECT secp256k1_ec_pubkey_combine([spend_pubkey, secp256k1_ec_pubkey_create(t_0
 FROM t_0_calculation, scan_calculation;
 ----
 true
+
+# BIP 352 Silent Payments tweak index test (k=0) using first test vector
+# This calculates the tweak
+query I
+WITH 
+  -- Input public keys from the test vector transaction (extracted from inputs)
+  input_pubkeys AS (
+    SELECT [
+      secp256k1_ec_pubkey_create(from_hex('eadc78165ff1f8ea94ad7cfdc54990738a4c53f6e0507b42154201b8e5dff3b1')),  -- First input pubkey
+      secp256k1_ec_pubkey_create(from_hex('93f5ed907ad5b2bdbbdcb5d9116ebc0a4e1f92f910d5260237fa45a9408aad16'))   -- Second input pubkey  
+    ] as pubkeys
+  ),
+  
+  -- Create outpoints from the test vector inputs
+  outpoints AS (
+    SELECT [
+      create_outpoint(from_hex('f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16'), 0),
+      create_outpoint(from_hex('a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d'), 0)
+    ] as ops
+  ),
+  
+  combined_pubkey AS (
+  	SELECT
+  	  secp256k1_ec_pubkey_combine(pubkeys) as combined_pubkey
+  	FROM input_pubkeys
+  )
+  
+SELECT secp256k1_ec_pubkey_tweak_mul(combined_pubkey, 
+                 secp256k1_tagged_sha256('BIP0352/Inputs', min_outpoint(ops) || combined_pubkey)) = from_hex('024ac253c216532e961988e2a8ce266a447c894c781e52ef6cee902361db960004')
+  FROM combined_pubkey, outpoints;
+----
+true
