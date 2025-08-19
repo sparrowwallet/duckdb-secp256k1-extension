@@ -88,9 +88,10 @@ inline void Secp256k1EcPubkeyCombineScalarFun(DataChunk &args, ExpressionState &
 				break;
 			}
 
-			// Parse the public key
+			// Parse the public key - copy the data locally to avoid pointer issues
 			secp256k1_pubkey pubkey;
-			const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
+			unsigned char input_data[33];
+			memcpy(input_data, blob_data.GetDataUnsafe(), 33);
 
 			if (secp256k1_ec_pubkey_parse(ctx, &pubkey, input_data, 33) != 1) {
 				all_valid = false;
@@ -287,11 +288,17 @@ inline void Secp256k1TaggedSha256ScalarFun(DataChunk &args, ExpressionState &sta
 
 		// Create output buffer for 32-byte hash
 		unsigned char hash32[32];
+		
+		// Copy input data locally to avoid pointer issues
+		size_t tag_size = tag_data.GetSize();
+		size_t msg_size = msg_data.GetSize();
+		std::vector<unsigned char> tag_buffer(tag_size);
+		std::vector<unsigned char> msg_buffer(msg_size);
+		memcpy(tag_buffer.data(), tag_data.GetDataUnsafe(), tag_size);
+		memcpy(msg_buffer.data(), msg_data.GetDataUnsafe(), msg_size);
 
 		// Call secp256k1_tagged_sha256
-		int result_code =
-		    secp256k1_tagged_sha256(ctx, hash32, (const unsigned char *)tag_data.GetDataUnsafe(), tag_data.GetSize(),
-		                            (const unsigned char *)msg_data.GetDataUnsafe(), msg_data.GetSize());
+		int result_code = secp256k1_tagged_sha256(ctx, hash32, tag_buffer.data(), tag_size, msg_buffer.data(), msg_size);
 
 		if (result_code != 1) {
 			// Set result to NULL if hashing failed (though this should always succeed)
@@ -343,17 +350,19 @@ inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState 
 			continue;
 		}
 
-		// Parse the public key
+		// Parse the public key - copy the data locally to avoid pointer issues
 		secp256k1_pubkey pubkey;
-		const unsigned char *pubkey_input = reinterpret_cast<const unsigned char *>(pubkey_data.GetDataUnsafe());
+		unsigned char pubkey_input[33];
+		memcpy(pubkey_input, pubkey_data.GetDataUnsafe(), 33);
 
 		if (secp256k1_ec_pubkey_parse(ctx, &pubkey, pubkey_input, 33) != 1) {
 			FlatVector::SetNull(result, i, true);
 			continue;
 		}
 
-		// Apply the scalar tweak
-		const unsigned char *tweak32 = reinterpret_cast<const unsigned char *>(tweak_data.GetDataUnsafe());
+		// Apply the scalar tweak - copy the data locally to avoid pointer issues
+		unsigned char tweak32[32];
+		memcpy(tweak32, tweak_data.GetDataUnsafe(), 32);
 
 		if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, tweak32) != 1) {
 			// Tweak failed (invalid tweak or resulting point at infinity)
@@ -405,9 +414,10 @@ inline void Secp256k1EcPubkeyCreateScalarFun(DataChunk &args, ExpressionState &s
 			continue;
 		}
 
-		// Create the public key
+		// Create the public key - copy the data locally to avoid pointer issues
 		secp256k1_pubkey pubkey;
-		const unsigned char *seckey32 = reinterpret_cast<const unsigned char *>(seckey_data.GetDataUnsafe());
+		unsigned char seckey32[32];
+		memcpy(seckey32, seckey_data.GetDataUnsafe(), 32);
 
 		if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey32) != 1) {
 			// Secret key is invalid (zero, out of range, etc.)
