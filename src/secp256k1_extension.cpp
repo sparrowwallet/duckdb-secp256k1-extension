@@ -40,151 +40,124 @@ inline void Secp256k1EcPubkeyCombineScalarFun(DataChunk &args, ExpressionState &
 	D_ASSERT(args.ColumnCount() == 1);
 
 	auto &list_vector = args.data[0];
+	
+	UnaryExecutor::ExecuteWithNulls<list_entry_t, string_t>(
+		list_vector, result, args.size(),
+		[&](list_entry_t list_data, ValidityMask &mask, idx_t idx) {
+			// Get the child vector (contains the actual BLOB elements)
+			auto &child_vector = ListVector::GetEntry(list_vector);
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			std::vector<secp256k1_pubkey> parsed_pubkeys;
+			std::vector<const secp256k1_pubkey *> pubkey_ptrs;
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if the list is NULL
-		if (FlatVector::IsNull(list_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
+			bool all_valid = true;
 
-		// Get the list data for this row
-		auto list_data = FlatVector::GetData<list_entry_t>(list_vector)[i];
-
-		// Get the child vector (contains the actual BLOB elements)
-		auto &child_vector = ListVector::GetEntry(list_vector);
-
-		std::vector<secp256k1_pubkey> parsed_pubkeys;
-		std::vector<const secp256k1_pubkey *> pubkey_ptrs;
-
-		bool all_valid = true;
-
-		// Check if list is empty
-		if (list_data.length == 0) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Parse all public keys in the list for this row
-		for (idx_t j = 0; j < list_data.length; j++) {
-			idx_t child_idx = list_data.offset + j;
-
-			// Check if this list element is NULL
-			if (FlatVector::IsNull(child_vector, child_idx)) {
-				all_valid = false;
-				break;
+			// Check if list is empty
+			if (list_data.length == 0) {
+				mask.SetInvalid(idx);
+				return string_t();
 			}
 
-			// Get the blob data
-			auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
+			// Parse all public keys in the list for this row
+			for (idx_t j = 0; j < list_data.length; j++) {
+				idx_t child_idx = list_data.offset + j;
 
-			// Validate that the blob is exactly 33 bytes (compressed pubkey format)
-			if (blob_data.GetSize() != 33) {
-				all_valid = false;
-				break;
+				// Check if this list element is NULL
+				if (FlatVector::IsNull(child_vector, child_idx)) {
+					all_valid = false;
+					break;
+				}
+
+				// Get the blob data
+				auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
+
+				// Validate that the blob is exactly 33 bytes (compressed pubkey format)
+				if (blob_data.GetSize() != 33) {
+					all_valid = false;
+					break;
+				}
+
+				// Parse the public key - copy the data locally to avoid pointer issues
+				secp256k1_pubkey pubkey;
+				unsigned char input_data[33];
+				memcpy(input_data, blob_data.GetData(), 33);
+
+				if (secp256k1_ec_pubkey_parse(ctx, &pubkey, input_data, 33) != 1) {
+					all_valid = false;
+					break;
+				}
+
+				parsed_pubkeys.push_back(pubkey);
 			}
 
-			// Parse the public key - copy the data locally to avoid pointer issues
-			secp256k1_pubkey pubkey;
-			unsigned char input_data[33];
-			memcpy(input_data, blob_data.GetDataUnsafe(), 33);
-
-			if (secp256k1_ec_pubkey_parse(ctx, &pubkey, input_data, 33) != 1) {
-				all_valid = false;
-				break;
+			if (!all_valid || parsed_pubkeys.empty()) {
+				// Set result to NULL for this row
+				mask.SetInvalid(idx);
+				return string_t();
 			}
 
-			parsed_pubkeys.push_back(pubkey);
+			// Create array of pointers for secp256k1_ec_pubkey_combine
+			for (const auto &pk : parsed_pubkeys) {
+				pubkey_ptrs.push_back(&pk);
+			}
+
+			// Combine the public keys
+			secp256k1_pubkey combined_pubkey;
+			if (secp256k1_ec_pubkey_combine(ctx, &combined_pubkey, pubkey_ptrs.data(), pubkey_ptrs.size()) != 1) {
+				// Set result to NULL for this row if combination failed
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Serialize the combined public key back to compressed format (33 bytes)
+			unsigned char output[33];
+			size_t output_len = 33;
+
+			if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &combined_pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+				// Set result to NULL for this row if serialization failed
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)output, 33);
 		}
-
-		if (!all_valid || parsed_pubkeys.empty()) {
-			// Set result to NULL for this row
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create array of pointers for secp256k1_ec_pubkey_combine
-		for (const auto &pk : parsed_pubkeys) {
-			pubkey_ptrs.push_back(&pk);
-		}
-
-		// Combine the public keys
-		secp256k1_pubkey combined_pubkey;
-		if (secp256k1_ec_pubkey_combine(ctx, &combined_pubkey, pubkey_ptrs.data(), pubkey_ptrs.size()) != 1) {
-			// Set result to NULL for this row if combination failed
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Serialize the combined public key back to compressed format (33 bytes)
-		unsigned char output[33];
-		size_t output_len = 33;
-
-		if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &combined_pubkey, SECP256K1_EC_COMPRESSED) != 1) {
-			// Set result to NULL for this row if serialization failed
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 33);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
 // Function to concatenate a 32-byte blob with a 4-byte integer in little-endian format
 inline void CreateOutpointScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 2);
 
-	auto &blob_vector = args.data[0];
-	auto &int_vector = args.data[1];
+	BinaryExecutor::ExecuteWithNulls<string_t, int32_t, string_t>(
+		args.data[0], args.data[1], result, args.size(),
+		[&](string_t blob_data, int32_t int_value, ValidityMask &mask, idx_t idx) {
+			// Validate that the blob is exactly 32 bytes
+			if (blob_data.GetSize() != 32) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Create output buffer (32 bytes + 4 bytes = 36 bytes)
+			unsigned char output[36];
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if either input is NULL
-		if (FlatVector::IsNull(blob_vector, i) || FlatVector::IsNull(int_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Copy the 32-byte blob in reverse order (big-endian to little-endian)
+			unsigned char input_data[32];
+			memcpy(input_data, blob_data.GetData(), 32);
+			for (int j = 0; j < 32; j++) {
+				output[j] = input_data[31 - j];
+			}
+
+			// Append the 4-byte integer in little-endian format
+			output[32] = (unsigned char)(int_value & 0xFF);
+			output[33] = (unsigned char)((int_value >> 8) & 0xFF);
+			output[34] = (unsigned char)((int_value >> 16) & 0xFF);
+			output[35] = (unsigned char)((int_value >> 24) & 0xFF);
+
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)output, 36);
 		}
-
-		// Get the blob data
-		auto blob_data = FlatVector::GetData<string_t>(blob_vector)[i];
-
-		// Validate that the blob is exactly 32 bytes
-		if (blob_data.GetSize() != 32) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Get the integer value
-		auto int_value = FlatVector::GetData<int32_t>(int_vector)[i];
-
-		// Create output buffer (32 bytes + 4 bytes = 36 bytes)
-		unsigned char output[36];
-
-		// Copy the 32-byte blob in reverse order (big-endian to little-endian)
-		const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
-		for (int j = 0; j < 32; j++) {
-			output[j] = input_data[31 - j];
-		}
-
-		// Append the 4-byte integer in little-endian format
-		output[32] = (unsigned char)(int_value & 0xFF);
-		output[33] = (unsigned char)((int_value >> 8) & 0xFF);
-		output[34] = (unsigned char)((int_value >> 16) & 0xFF);
-		output[35] = (unsigned char)((int_value >> 24) & 0xFF);
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 36);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
 // Function to find the lexicographically smallest 36-byte blob
@@ -193,71 +166,61 @@ inline void MinOutpointScalarFun(DataChunk &args, ExpressionState &state, Vector
 	D_ASSERT(args.ColumnCount() == 1);
 
 	auto &list_vector = args.data[0];
+	
+	UnaryExecutor::ExecuteWithNulls<list_entry_t, string_t>(
+		list_vector, result, args.size(),
+		[&](list_entry_t list_data, ValidityMask &mask, idx_t idx) {
+			// Get the child vector (contains the actual BLOB elements)
+			auto &child_vector = ListVector::GetEntry(list_vector);
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			string_t min_blob;
+			bool found_valid = false;
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if the list is NULL
-		if (FlatVector::IsNull(list_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Get the list data for this row
-		auto list_data = FlatVector::GetData<list_entry_t>(list_vector)[i];
-
-		// Get the child vector (contains the actual BLOB elements)
-		auto &child_vector = ListVector::GetEntry(list_vector);
-
-		string_t min_blob;
-		bool found_valid = false;
-
-		// Check if list is empty
-		if (list_data.length == 0) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Check all blobs in the list for this row
-		for (idx_t j = 0; j < list_data.length; j++) {
-			idx_t child_idx = list_data.offset + j;
-
-			// Check if this list element is NULL
-			if (FlatVector::IsNull(child_vector, child_idx)) {
-				continue;
+			// Check if list is empty
+			if (list_data.length == 0) {
+				mask.SetInvalid(idx);
+				return string_t();
 			}
 
-			// Get the blob data
-			auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
+			// Check all blobs in the list for this row
+			for (idx_t j = 0; j < list_data.length; j++) {
+				idx_t child_idx = list_data.offset + j;
 
-			// Validate that the blob is exactly 36 bytes
-			if (blob_data.GetSize() != 36) {
-				continue;
-			}
+				// Check if this list element is NULL
+				if (FlatVector::IsNull(child_vector, child_idx)) {
+					continue;
+				}
 
-			// If this is the first valid blob, use it as the minimum
-			if (!found_valid) {
-				min_blob = blob_data;
-				found_valid = true;
-			} else {
-				// Compare lexicographically (memcmp does lexicographic comparison for bytes)
-				if (memcmp(blob_data.GetDataUnsafe(), min_blob.GetDataUnsafe(), 36) < 0) {
+				// Get the blob data
+				auto blob_data = FlatVector::GetData<string_t>(child_vector)[child_idx];
+
+				// Validate that the blob is exactly 36 bytes
+				if (blob_data.GetSize() != 36) {
+					continue;
+				}
+
+				// If this is the first valid blob, use it as the minimum
+				if (!found_valid) {
 					min_blob = blob_data;
+					found_valid = true;
+				} else {
+					// Compare lexicographically (memcmp does lexicographic comparison for bytes)
+					if (memcmp(blob_data.GetData(), min_blob.GetData(), 36) < 0) {
+						min_blob = blob_data;
+					}
 				}
 			}
-		}
 
-		if (!found_valid) {
-			// Set result to NULL if no valid 36-byte blobs found
-			FlatVector::SetNull(result, i, true);
-		} else {
-			// Create the result blob by copying the minimum blob
-			string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)min_blob.GetDataUnsafe(), 36);
-			FlatVector::GetData<string_t>(result)[i] = result_blob;
+			if (!found_valid) {
+				// Set result to NULL if no valid 36-byte blobs found
+				mask.SetInvalid(idx);
+				return string_t();
+			} else {
+				// Create and return the result blob by copying the minimum blob
+				return StringVector::AddStringOrBlob(result, (const char *)min_blob.GetData(), 36);
+			}
 		}
-	}
+	);
 }
 
 // Function to compute secp256k1 tagged SHA256 hash
@@ -267,49 +230,30 @@ inline void Secp256k1TaggedSha256ScalarFun(DataChunk &args, ExpressionState &sta
 	// Get the secp256k1 context
 	secp256k1_context *ctx = GetSecp256k1Context();
 
-	auto &tag_vector = args.data[0];
-	auto &msg_vector = args.data[1];
+	BinaryExecutor::ExecuteWithNulls<string_t, string_t, string_t>(
+		args.data[0], args.data[1], result, args.size(),
+		[&](string_t tag_data, string_t msg_data, ValidityMask &mask, idx_t idx) {
+			// Copy the string data immediately to avoid any pointer issues
+			std::string tag_str = tag_data.GetString();
+			std::string msg_str = msg_data.GetString();
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Create output buffer for 32-byte hash
+			unsigned char hash32[32];
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if either input is NULL
-		if (FlatVector::IsNull(tag_vector, i) || FlatVector::IsNull(msg_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Call secp256k1_tagged_sha256 with copied string data
+			int result_code = secp256k1_tagged_sha256(ctx, hash32, (const unsigned char *)tag_str.c_str(), tag_str.size(),
+			                                          (const unsigned char *)msg_str.c_str(), msg_str.size());
+
+			if (result_code != 1) {
+				// Set result to NULL if hashing failed (though this should always succeed)
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)hash32, 32);
 		}
-
-		// Get the tag data
-		auto tag_data = FlatVector::GetData<string_t>(tag_vector)[i];
-		// Get the message data
-		auto msg_data = FlatVector::GetData<string_t>(msg_vector)[i];
-
-		// Create output buffer for 32-byte hash
-		unsigned char hash32[32];
-		
-		// Copy input data locally to avoid pointer issues
-		size_t tag_size = tag_data.GetSize();
-		size_t msg_size = msg_data.GetSize();
-		std::vector<unsigned char> tag_buffer(tag_size);
-		std::vector<unsigned char> msg_buffer(msg_size);
-		memcpy(tag_buffer.data(), tag_data.GetDataUnsafe(), tag_size);
-		memcpy(msg_buffer.data(), msg_data.GetDataUnsafe(), msg_size);
-
-		// Call secp256k1_tagged_sha256
-		int result_code = secp256k1_tagged_sha256(ctx, hash32, tag_buffer.data(), tag_size, msg_buffer.data(), msg_size);
-
-		if (result_code != 1) {
-			// Set result to NULL if hashing failed (though this should always succeed)
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)hash32, 32);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
 // Function to tweak a public key by scalar multiplication
@@ -319,70 +263,54 @@ inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState 
 	// Get the secp256k1 context
 	secp256k1_context *ctx = GetSecp256k1Context();
 
-	auto &pubkey_vector = args.data[0];
-	auto &tweak_vector = args.data[1];
+	BinaryExecutor::ExecuteWithNulls<string_t, string_t, string_t>(
+		args.data[0], args.data[1], result, args.size(),
+		[&](string_t pubkey_data, string_t tweak_data, ValidityMask &mask, idx_t idx) {
+			// Validate that the public key is exactly 33 bytes (compressed format)
+			if (pubkey_data.GetSize() != 33) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Validate that the tweak is exactly 32 bytes
+			if (tweak_data.GetSize() != 32) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if either input is NULL
-		if (FlatVector::IsNull(pubkey_vector, i) || FlatVector::IsNull(tweak_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Copy input data to safe local buffers
+			unsigned char pubkey_input[33];
+			unsigned char tweak32[32];
+			memcpy(pubkey_input, pubkey_data.GetData(), 33);
+			memcpy(tweak32, tweak_data.GetData(), 32);
+
+			// Parse the public key
+			secp256k1_pubkey pubkey;
+			if (secp256k1_ec_pubkey_parse(ctx, &pubkey, pubkey_input, 33) != 1) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Apply the scalar tweak
+			if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, tweak32) != 1) {
+				// Tweak failed (invalid tweak or resulting point at infinity)
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Serialize the tweaked public key back to compressed format (33 bytes)
+			unsigned char output[33];
+			size_t output_len = 33;
+
+			if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)output, 33);
 		}
-
-		// Get the public key data
-		auto pubkey_data = FlatVector::GetData<string_t>(pubkey_vector)[i];
-		// Get the tweak data
-		auto tweak_data = FlatVector::GetData<string_t>(tweak_vector)[i];
-
-		// Validate that the public key is exactly 33 bytes (compressed format)
-		if (pubkey_data.GetSize() != 33) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Validate that the tweak is exactly 32 bytes
-		if (tweak_data.GetSize() != 32) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Parse the public key - copy the data locally to avoid pointer issues
-		secp256k1_pubkey pubkey;
-		unsigned char pubkey_input[33];
-		memcpy(pubkey_input, pubkey_data.GetDataUnsafe(), 33);
-
-		if (secp256k1_ec_pubkey_parse(ctx, &pubkey, pubkey_input, 33) != 1) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Apply the scalar tweak - copy the data locally to avoid pointer issues
-		unsigned char tweak32[32];
-		memcpy(tweak32, tweak_data.GetDataUnsafe(), 32);
-
-		if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, tweak32) != 1) {
-			// Tweak failed (invalid tweak or resulting point at infinity)
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Serialize the tweaked public key back to compressed format (33 bytes)
-		unsigned char output[33];
-		size_t output_len = 33;
-
-		if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 33);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
 // Function to create a public key from a secret key using secp256k1_ec_pubkey_create
@@ -392,128 +320,91 @@ inline void Secp256k1EcPubkeyCreateScalarFun(DataChunk &args, ExpressionState &s
 	// Get the secp256k1 context
 	secp256k1_context *ctx = GetSecp256k1Context();
 
-	auto &seckey_vector = args.data[0];
+	UnaryExecutor::ExecuteWithNulls<string_t, string_t>(
+		args.data[0], result, args.size(),
+		[&](string_t seckey_data, ValidityMask &mask, idx_t idx) {
+			// Validate that the secret key is exactly 32 bytes
+			if (seckey_data.GetSize() != 32) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Copy input data to safe local buffer
+			unsigned char seckey32[32];
+			memcpy(seckey32, seckey_data.GetData(), 32);
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if input is NULL
-		if (FlatVector::IsNull(seckey_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Create the public key
+			secp256k1_pubkey pubkey;
+			if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey32) != 1) {
+				// Secret key is invalid (zero, out of range, etc.)
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Serialize the public key to compressed format (33 bytes)
+			unsigned char output[33];
+			size_t output_len = 33;
+
+			if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+				mask.SetInvalid(idx);
+				return string_t();
+			}
+
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)output, 33);
 		}
-
-		// Get the secret key data
-		auto seckey_data = FlatVector::GetData<string_t>(seckey_vector)[i];
-
-		// Validate that the secret key is exactly 32 bytes
-		if (seckey_data.GetSize() != 32) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create the public key - copy the data locally to avoid pointer issues
-		secp256k1_pubkey pubkey;
-		unsigned char seckey32[32];
-		memcpy(seckey32, seckey_data.GetDataUnsafe(), 32);
-
-		if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey32) != 1) {
-			// Secret key is invalid (zero, out of range, etc.)
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Serialize the public key to compressed format (33 bytes)
-		unsigned char output[33];
-		size_t output_len = 33;
-
-		if (secp256k1_ec_pubkey_serialize(ctx, output, &output_len, &pubkey, SECP256K1_EC_COMPRESSED) != 1) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 33);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
-// Function to convert a 32-byte blob to a ubigint with most significant byte first
+// Function to convert bytes from a blob to a bigint with most significant byte first, starting at an offset
 inline void HashPrefixToIntScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
-	D_ASSERT(args.ColumnCount() == 1);
+	D_ASSERT(args.ColumnCount() == 2);
 
-	auto &blob_vector = args.data[0];
+	BinaryExecutor::ExecuteWithNulls<string_t, uint32_t, int64_t>(
+		args.data[0], args.data[1], result, args.size(),
+		[&](string_t blob_data, uint32_t offset, ValidityMask &mask, idx_t idx) {
+			// Validate that the blob is long enough (offset + 8 bytes needed)
+			if (blob_data.GetSize() < offset + 8) {
+				mask.SetInvalid(idx);
+				return int64_t(0);
+			}
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Copy input data to safe local buffer starting from offset
+			unsigned char input_data[8];
+			memcpy(input_data, (const char*)blob_data.GetData() + offset, 8);
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if input is NULL
-		if (FlatVector::IsNull(blob_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Convert to bigint (big-endian, most significant byte first)
+			// Take 8 bytes starting from the offset
+			int64_t result_value = 0;
+			for (int j = 0; j < 8; j++) {
+				result_value = (result_value << 8) | input_data[j];
+			}
+
+			return result_value;
 		}
-
-		// Get the blob data
-		auto blob_data = FlatVector::GetData<string_t>(blob_vector)[i];
-
-		// Validate that the blob is exactly 32 bytes
-		if (blob_data.GetSize() != 32) {
-			FlatVector::SetNull(result, i, true);
-			continue;
-		}
-
-		// Get the input data as unsigned char array
-		const unsigned char *input_data = reinterpret_cast<const unsigned char *>(blob_data.GetDataUnsafe());
-
-		// Convert to bigint (big-endian, most significant byte first)
-		// Take the first 8 bytes of the hash as the most significant bytes
-		int64_t result_value = 0;
-		for (int j = 0; j < 8; j++) {
-			result_value = (result_value << 8) | input_data[j];
-		}
-
-		// Set the result
-		FlatVector::GetData<int64_t>(result)[i] = result_value;
-	}
+	);
 }
 
 // Function to convert an integer to a 4-byte blob in big-endian format (MSB first)
 inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 1);
 
-	auto &int_vector = args.data[0];
+	UnaryExecutor::Execute<int32_t, string_t>(
+		args.data[0], result, args.size(),
+		[&](int32_t int_value) {
+			// Create output buffer (4 bytes)
+			unsigned char output[4];
 
-	// Get number of rows to process
-	idx_t count = args.size();
+			// Store the integer in big-endian format (most significant byte first)
+			output[0] = (unsigned char)((int_value >> 24) & 0xFF); // MSB
+			output[1] = (unsigned char)((int_value >> 16) & 0xFF);
+			output[2] = (unsigned char)((int_value >> 8) & 0xFF);
+			output[3] = (unsigned char)(int_value & 0xFF); // LSB
 
-	// Process each row
-	for (idx_t i = 0; i < count; i++) {
-		// Check if input is NULL
-		if (FlatVector::IsNull(int_vector, i)) {
-			FlatVector::SetNull(result, i, true);
-			continue;
+			// Create and return the result blob
+			return StringVector::AddStringOrBlob(result, (const char *)output, 4);
 		}
-
-		// Get the integer value
-		auto int_value = FlatVector::GetData<int32_t>(int_vector)[i];
-
-		// Create output buffer (4 bytes)
-		unsigned char output[4];
-
-		// Store the integer in big-endian format (most significant byte first)
-		output[0] = (unsigned char)((int_value >> 24) & 0xFF); // MSB
-		output[1] = (unsigned char)((int_value >> 16) & 0xFF);
-		output[2] = (unsigned char)((int_value >> 8) & 0xFF);
-		output[3] = (unsigned char)(int_value & 0xFF); // LSB
-
-		// Create the result blob
-		string_t result_blob = StringVector::AddStringOrBlob(result, (const char *)output, 4);
-		FlatVector::GetData<string_t>(result)[i] = result_blob;
-	}
+	);
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
@@ -552,7 +443,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// Register the hash prefix to integer function
 	auto hash_prefix_to_int_function =
-	    ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB}, LogicalType::BIGINT, HashPrefixToIntScalarFun);
+	    ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB, LogicalType::UINTEGER}, LogicalType::BIGINT, HashPrefixToIntScalarFun);
 	ExtensionUtil::RegisterFunction(instance, hash_prefix_to_int_function);
 
 	// Register the integer to big-endian function

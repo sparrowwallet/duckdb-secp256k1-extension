@@ -305,39 +305,63 @@ SELECT int_to_big_endian(NULL);
 ----
 NULL
 
-# Test hash_prefix_to_int basic functionality (takes first 8 bytes as MSB)
+# Test hash_prefix_to_int basic functionality (takes 8 bytes starting at offset 0)
 query I
-SELECT hash_prefix_to_int(from_hex('0000000000000001000000000000000000000000000000000000000000000000'));
+SELECT hash_prefix_to_int(from_hex('0000000000000001000000000000000000000000000000000000000000000000'), 0);
 ----
 1
 
 # Test hash_prefix_to_int with zero input
 query I
-SELECT hash_prefix_to_int(from_hex('0000000000000000000000000000000000000000000000000000000000000000'));
+SELECT hash_prefix_to_int(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 0);
 ----
 0
 
 # Test hash_prefix_to_int with max 8-byte value (big-endian)
 query I
-SELECT hash_prefix_to_int(from_hex('FFFFFFFFFFFFFFFF000000000000000000000000000000000000000000000000'));
+SELECT hash_prefix_to_int(from_hex('FFFFFFFFFFFFFFFF000000000000000000000000000000000000000000000000'), 0);
 ----
 -1
 
 # Test hash_prefix_to_int with small value in MSB position
 query I
-SELECT hash_prefix_to_int(from_hex('0100000000000000000000000000000000000000000000000000000000000000'));
+SELECT hash_prefix_to_int(from_hex('0100000000000000000000000000000000000000000000000000000000000000'), 0);
 ----
 72057594037927936
 
-# Test hash_prefix_to_int with NULL input (should return NULL)
+# Test hash_prefix_to_int with offset (read from byte 8)
 query I
-SELECT hash_prefix_to_int(NULL);
+SELECT hash_prefix_to_int(from_hex('00000000000000000000000000000001000000000000000000000000000000'), 8);
+----
+1
+
+# Test hash_prefix_to_int with offset at end (read last 8 bytes)
+query I
+SELECT hash_prefix_to_int(from_hex('000000000000000000000000000000000000000000000000FFFFFFFFFFFFFFFF'), 24);
+----
+-1
+
+# Test hash_prefix_to_int with NULL blob input (should return NULL)
+query I
+SELECT hash_prefix_to_int(NULL, 0);
 ----
 NULL
 
-# Test hash_prefix_to_int with wrong length input (should return NULL)
+# Test hash_prefix_to_int with NULL offset input (should return NULL)
 query I
-SELECT hash_prefix_to_int(from_hex('00000000000000000000000000000000000000000000000000000000000000'));
+SELECT hash_prefix_to_int(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), NULL);
+----
+NULL
+
+# Test hash_prefix_to_int with insufficient length (should return NULL)
+query I
+SELECT hash_prefix_to_int(from_hex('00000000000000'), 0);
+----
+NULL
+
+# Test hash_prefix_to_int with offset beyond blob length (should return NULL)
+query I
+SELECT hash_prefix_to_int(from_hex('0000000000000000000000000000000000000000000000000000000000000000'), 25);
 ----
 NULL
 
