@@ -77,12 +77,9 @@ inline void Secp256k1EcPubkeyCombineScalarFun(DataChunk &args, ExpressionState &
 					break;
 				}
 
-				// Parse the public key - copy the data locally to avoid pointer issues
+				// Parse the public key
 				secp256k1_pubkey pubkey;
-				unsigned char input_data[33];
-				memcpy(input_data, blob_data.GetData(), 33);
-
-				if (secp256k1_ec_pubkey_parse(ctx, &pubkey, input_data, 33) != 1) {
+				if (secp256k1_ec_pubkey_parse(ctx, &pubkey, (const unsigned char*)blob_data.GetData(), 33) != 1) {
 					all_valid = false;
 					break;
 				}
@@ -142,8 +139,7 @@ inline void CreateOutpointScalarFun(DataChunk &args, ExpressionState &state, Vec
 			unsigned char output[36];
 
 			// Copy the 32-byte blob in reverse order (big-endian to little-endian)
-			unsigned char input_data[32];
-			memcpy(input_data, blob_data.GetData(), 32);
+			const unsigned char *input_data = (const unsigned char*)blob_data.GetData();
 			for (int j = 0; j < 32; j++) {
 				output[j] = input_data[31 - j];
 			}
@@ -278,21 +274,15 @@ inline void Secp256k1EcPubkeyTweakMulScalarFun(DataChunk &args, ExpressionState 
 				return string_t();
 			}
 
-			// Copy input data to safe local buffers
-			unsigned char pubkey_input[33];
-			unsigned char tweak32[32];
-			memcpy(pubkey_input, pubkey_data.GetData(), 33);
-			memcpy(tweak32, tweak_data.GetData(), 32);
-
 			// Parse the public key
 			secp256k1_pubkey pubkey;
-			if (secp256k1_ec_pubkey_parse(ctx, &pubkey, pubkey_input, 33) != 1) {
+			if (secp256k1_ec_pubkey_parse(ctx, &pubkey, (const unsigned char*)pubkey_data.GetData(), 33) != 1) {
 				mask.SetInvalid(idx);
 				return string_t();
 			}
 
 			// Apply the scalar tweak
-			if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, tweak32) != 1) {
+			if (secp256k1_ec_pubkey_tweak_mul(ctx, &pubkey, (const unsigned char*)tweak_data.GetData()) != 1) {
 				// Tweak failed (invalid tweak or resulting point at infinity)
 				mask.SetInvalid(idx);
 				return string_t();
@@ -329,13 +319,9 @@ inline void Secp256k1EcPubkeyCreateScalarFun(DataChunk &args, ExpressionState &s
 				return string_t();
 			}
 
-			// Copy input data to safe local buffer
-			unsigned char seckey32[32];
-			memcpy(seckey32, seckey_data.GetData(), 32);
-
 			// Create the public key
 			secp256k1_pubkey pubkey;
-			if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey32) != 1) {
+			if (secp256k1_ec_pubkey_create(ctx, &pubkey, (const unsigned char*)seckey_data.GetData()) != 1) {
 				// Secret key is invalid (zero, out of range, etc.)
 				mask.SetInvalid(idx);
 				return string_t();
@@ -369,9 +355,8 @@ inline void HashPrefixToIntScalarFun(DataChunk &args, ExpressionState &state, Ve
 				return int64_t(0);
 			}
 
-			// Copy input data to safe local buffer starting from offset
-			unsigned char input_data[8];
-			memcpy(input_data, (const char*)blob_data.GetData() + offset, 8);
+			// Read directly from blob data starting at offset
+			const unsigned char *input_data = (const unsigned char*)blob_data.GetData() + offset;
 
 			// Convert to bigint (big-endian, most significant byte first)
 			// Take 8 bytes starting from the offset
