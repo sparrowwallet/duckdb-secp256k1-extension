@@ -1,6 +1,7 @@
 # DuckDB secp256k1 Extension
 
 A DuckDB extension that provides secp256k1 elliptic curve cryptography functions and Bitcoin-related utilities.
+All cryptographic operations use the [libsecp256k1](https://github.com/bitcoin-core/secp256k1/) library.
 
 ## Building the Extension
 
@@ -102,7 +103,7 @@ Computes a tagged SHA256 hash as defined in BIP 340.
 
 **Parameters:**
 - `tag` (VARCHAR): Tag string
-- `message` (VARCHAR): Message to hash
+- `message` (BLOB or VARCHAR): Message to hash
 
 **Returns:** BLOB (32-byte hash)
 
