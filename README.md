@@ -95,6 +95,63 @@ SELECT secp256k1_ec_pubkey_tweak_mul(
 );
 ```
 
+#### `secp256k1_xonly_key_match(xonly_prefixes, target_compressed, compressed_keys)`
+
+Checks if a target compressed public key can be found either directly by matching its x-coordinate's first 8 bytes (big-endian) against a list of BIGINT prefixes, or by combining the target with compressed public keys from a second list and comparing the result. This function is useful for Bitcoin Silent Payments and other protocols that need to scan for key matches with elliptic curve operations.
+
+**Parameters:**
+- `xonly_prefixes` (LIST[BIGINT]): Array of 64-bit integers representing the first 8 bytes (big-endian) of x-only public keys to search in
+- `target_compressed` (BLOB): 33-byte target compressed public key
+- `compressed_keys` (LIST[BLOB]): Array of 33-byte compressed public keys to combine with target
+
+**Returns:** BOOLEAN (true if match found, false otherwise)
+
+**Behavior:**
+1. Extracts first 8 bytes (big-endian) of `target_compressed` key's x-coordinate as a BIGINT prefix
+2. First checks for direct match of this prefix against the `xonly_prefixes` list
+3. If no direct match, iterates through `compressed_keys` list:
+   - For each compressed key, combines it with `target_compressed` using elliptic curve addition
+   - Extracts x-coordinate of result and converts first 8 bytes to BIGINT prefix
+   - Compares this prefix to all values in `xonly_prefixes` list
+   - Also tries negated version of compressed key (covers both possible y-coordinates)
+   - Returns true on first match found
+4. Returns false if no matches found after checking all combinations
+
+**Example:**
+```sql
+-- Direct match test using BIGINT prefixes
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as x_only_key,
+        from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as compressed_key
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(x_only_key, 0)],  -- BIGINT[] with first 8 bytes of key as big-endian int
+    compressed_key,                       -- Target compressed key
+    []                                    -- Empty compressed keys
+) FROM test_data; -- Returns: true
+
+-- Key combination test (G + 2G = 3G scenario)
+WITH test_keys AS (
+    SELECT 
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) as g_point,
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as double_g,
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as triple_g
+),
+x_coords AS (
+    SELECT 
+        from_hex(substring(to_hex(g_point), 3, 64)) as g_x,
+        from_hex(substring(to_hex(triple_g), 3, 64)) as triple_g_x,
+        double_g
+    FROM test_keys
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(triple_g_x, 0)],  -- BIGINT[] with first 8 bytes of 3G x-coordinate
+    g_point,                              -- Target: G point as compressed key
+    [double_g]                            -- Compressed keys: 2G (G + 2G = 3G should match)
+) FROM x_coords; -- Returns: true
+```
+
 ### Cryptographic Hash Functions
 
 #### `secp256k1_tagged_sha256(tag, message)`
@@ -248,4 +305,42 @@ WITH outpoints AS (
            create_outpoint(from_hex('fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321'), 1) as out2
 )
 SELECT min_outpoint([out1, out2]) as min_outpoint FROM outpoints;
+```
+
+### Silent Payments Key Scanning
+
+```sql
+-- Example of scanning for Silent Payments keys using BIGINT prefixes
+-- This demonstrates the key matching functionality used in Bitcoin Silent Payments (BIP 352)
+WITH wallet_keys AS (
+    -- Simulated wallet's known x-only public keys (32 bytes each)
+    SELECT [
+        from_hex('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'),
+        from_hex('fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321')
+    ] as known_keys
+),
+key_prefixes AS (
+    -- Convert x-only keys to BIGINT prefixes (first 8 bytes, big-endian)
+    SELECT [
+        hash_prefix_to_int(known_keys[1], 0),
+        hash_prefix_to_int(known_keys[2], 0)
+    ] as known_prefixes
+    FROM wallet_keys
+),
+transaction_inputs AS (
+    -- Compressed public keys from transaction inputs (33 bytes each)
+    SELECT [
+        secp256k1_ec_pubkey_create(from_hex('1111111111111111111111111111111111111111111111111111111111111111')),
+        secp256k1_ec_pubkey_create(from_hex('2222222222222222222222222222222222222222222222222222222222222222'))
+    ] as input_keys
+),
+scan_target AS (
+    -- Target compressed key we're checking for (e.g., from a transaction output)
+    SELECT secp256k1_ec_pubkey_create(from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890')) as target_key
+)
+SELECT secp256k1_xonly_key_match(
+    (SELECT known_prefixes FROM key_prefixes),  -- BIGINT[] array of key prefixes
+    (SELECT target_key FROM scan_target),       -- Target compressed key (BLOB)
+    (SELECT input_keys FROM transaction_inputs) -- Compressed input keys for combination
+) as key_belongs_to_wallet;
 ```

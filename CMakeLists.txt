@@ -24,6 +24,7 @@ add_definitions(-DECMULT_GEN_PRECISION_BITS=4)
 add_definitions(-DUSE_FIELD_10X26)
 add_definitions(-DUSE_SCALAR_8X32)
 add_definitions(-DENABLE_MODULE_ECDH)
+add_definitions(-DENABLE_MODULE_EXTRAKEYS)
 
 # Windows-specific definitions for static linking
 if(WIN32)

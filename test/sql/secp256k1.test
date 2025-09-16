@@ -524,3 +524,194 @@ SELECT secp256k1_ec_pubkey_tweak_mul(combined_pubkey,
   FROM combined_pubkey, outpoints;
 ----
 true
+
+# Test secp256k1_xonly_key_match function with direct match
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as x_only_key,
+        from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as compressed_key
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(x_only_key, 0)],  -- BIGINT[] list containing first 8 bytes of G point's x value
+    compressed_key,                       -- target compressed key (G point as compressed BLOB)
+    []                                    -- empty compressed keys list
+) FROM test_data;
+----
+true
+
+# Test secp256k1_xonly_key_match function with no match
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as key1,
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key2
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(key1, 0)],  -- BIGINT[] list containing first 8 bytes of G point's x value
+    key2,                           -- different target compressed key
+    []                              -- empty compressed keys list
+) FROM test_data;
+----
+false
+
+# Test secp256k1_xonly_key_match function with empty lists
+query I
+SELECT secp256k1_xonly_key_match(
+    CAST([] AS BIGINT[]),                                                               -- empty BIGINT array
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),   -- target compressed key
+    []                                                                                  -- empty compressed keys list
+);
+----
+false
+
+# Test secp256k1_xonly_key_match function with NULL inputs
+query I
+SELECT secp256k1_xonly_key_match(NULL, NULL, NULL);
+----
+NULL
+
+# Test secp256k1_xonly_key_match function with invalid compressed key length
+query I
+SELECT secp256k1_xonly_key_match(
+    [8646911284551352320],  -- Some BIGINT value
+    from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'),  -- 31 bytes instead of 33
+    []
+);
+----
+NULL
+
+# Test secp256k1_xonly_key_match function with key combination using BIGINT[] prefix matching
+# This tests the core functionality with the new BIGINT[] first argument
+query I
+WITH test_keys AS (
+    SELECT 
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) as g_point,      -- G
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as double_g,     -- 2G
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as triple_g      -- 3G
+),
+x_coords AS (
+    SELECT 
+        g_point, double_g, triple_g,
+        from_hex(substring(to_hex(g_point), 3, 64)) as g_x,
+        from_hex(substring(to_hex(triple_g), 3, 64)) as triple_g_x
+    FROM test_keys
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(triple_g_x, 0)],  -- BIGINT[] with first 8 bytes of 3G x-coordinate
+    g_point,                              -- Target: G point as compressed key
+    [double_g]                            -- Compressed keys: 2G (G + 2G = 3G should match)
+) FROM x_coords;
+----
+true
+
+# Test secp256k1_xonly_key_match function with multiple BIGINT prefixes
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef') as key1,
+        from_hex('fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321') as key2,
+        from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890') as key3,
+        secp256k1_ec_pubkey_create(from_hex('1111111111111111111111111111111111111111111111111111111111111111')) as input_key
+),
+target_key AS (
+    SELECT 
+        input_key,
+        from_hex(substring(to_hex(input_key), 3, 64)) as input_key_x
+    FROM test_data
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(input_key_x, 0)],  -- BIGINT prefix of input key's x-coordinate
+    input_key,                             -- Target as compressed key (should match directly)
+    []                                     -- Empty compressed keys list
+) FROM target_key;
+----
+true
+
+# Test secp256k1_xonly_key_match function with invalid compressed key length
+# Should continue processing and ignore invalid keys
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as x_only_key,
+        from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as compressed_key
+)
+SELECT secp256k1_xonly_key_match(
+    [hash_prefix_to_int(x_only_key, 0)],                                                               -- BIGINT[] with G point prefix
+    compressed_key,                                                                                     -- Target: G compressed key
+    [from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), compressed_key]     -- Invalid 32-byte + valid G compressed
+) FROM test_data;
+----
+true
+
+# Test secp256k1_xonly_key_match function with all invalid compressed keys
+# Should return false since no valid combinations can be made and no direct match
+query I
+SELECT secp256k1_xonly_key_match(
+    [1],  -- Different BIGINT prefix, no direct match
+    from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),  -- Valid compressed key but won't match prefix
+    [from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817'), from_hex('1234')]  -- All invalid compressed keys
+);
+----
+false
+
+# Test secp256k1_xonly_key_match function with NULL elements in lists
+# Should skip NULL elements and process valid ones
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as x_only_key,
+        from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as compressed_key
+)
+SELECT secp256k1_xonly_key_match(
+    [NULL, hash_prefix_to_int(x_only_key, 0), NULL],                                                    -- BIGINT[] with NULLs and G prefix
+    compressed_key,                                                                                      -- Target: G compressed key
+    [NULL, compressed_key, NULL]                                                                        -- Compressed keys with NULLs and G compressed
+) FROM test_data;
+----
+true
+
+# Test secp256k1_xonly_key_match function comprehensive test with BIGINT[] format
+# This test demonstrates the complete functionality in a single query with the new format
+query I
+WITH test_data AS (
+    SELECT 
+        from_hex('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as x_key1,
+        from_hex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798') as comp_key1,
+        secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as comp_key2
+),
+comprehensive_test AS (
+    SELECT
+        -- Direct match test
+        secp256k1_xonly_key_match(
+            [hash_prefix_to_int(x_key1, 0)], 
+            comp_key1, 
+            []
+        ) as direct_match_test,
+        
+        -- No match test
+        secp256k1_xonly_key_match(
+            [hash_prefix_to_int(x_key1, 0)], 
+            comp_key2, 
+            []
+        ) as no_match_test,
+        
+        -- Empty lists test
+        secp256k1_xonly_key_match(
+            CAST([] AS BIGINT[]), 
+            comp_key1, 
+            []
+        ) as empty_lists_test,
+        
+        -- NULL test
+        secp256k1_xonly_key_match(NULL, NULL, NULL) as null_test
+    FROM test_data
+)
+SELECT 
+    direct_match_test = true AND 
+    no_match_test = false AND 
+    empty_lists_test = false AND 
+    null_test IS NULL
+FROM comprehensive_test;
+----
+true

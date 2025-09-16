@@ -10,6 +10,7 @@
 
 // secp256k1 library
 #include "secp256k1.h"
+#include "secp256k1_extrakeys.h"
 
 #include <vector>
 #include <memory>
@@ -381,6 +382,171 @@ inline void IntegerToBigEndianScalarFun(DataChunk &args, ExpressionState &state,
 	});
 }
 
+// Helper function to extract first 8 bytes as big-endian int64
+static int64_t ExtractBigEndianInt64(const unsigned char *data) {
+	int64_t result = 0;
+	for (int i = 0; i < 8; i++) {
+		result = (result << 8) | data[i];
+	}
+	return result;
+}
+
+// Function to check if compressed key exists in list with compressed key combinations
+inline void Secp256k1XOnlyKeyMatchScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 3);
+
+	// Get the secp256k1 context
+	secp256k1_context *ctx = GetSecp256k1Context();
+
+	TernaryExecutor::ExecuteWithNulls<list_entry_t, string_t, list_entry_t, bool>(
+	    args.data[0], args.data[1], args.data[2], result, args.size(),
+	    [&](list_entry_t xonly_list, string_t target_compressed, list_entry_t compressed_list, ValidityMask &mask,
+	        idx_t idx) {
+		    // Validate target compressed key is exactly 33 bytes
+		    if (target_compressed.GetSize() != 33) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Extract first 8 bytes of target compressed key's x-coordinate as big-endian int64
+		    // Skip the first byte (compression flag) and take bytes 1-8
+		    int64_t target_prefix = ExtractBigEndianInt64((const unsigned char *)target_compressed.GetData() + 1);
+
+		    // Get the child vectors
+		    auto &xonly_child_vector = ListVector::GetEntry(args.data[0]);
+		    auto &compressed_child_vector = ListVector::GetEntry(args.data[2]);
+
+		    // First, check for direct match in the x-only list (now comparing BIGINT values)
+		    for (idx_t j = 0; j < xonly_list.length; j++) {
+			    idx_t child_idx = xonly_list.offset + j;
+
+			    // Skip NULL elements
+			    if (FlatVector::IsNull(xonly_child_vector, child_idx)) {
+				    continue;
+			    }
+
+			    // Get the BIGINT value from the list
+			    auto xonly_int64 = FlatVector::GetData<int64_t>(xonly_child_vector)[child_idx];
+
+			    // Direct comparison of first 8 bytes as BIGINT
+			    if (xonly_int64 == target_prefix) {
+				    return true;
+			    }
+		    }
+
+		    // Only parse the target compressed key if we need to do combinations
+		    if (compressed_list.length == 0) {
+			    // No compressed keys to combine, and no direct match found
+			    return false;
+		    }
+
+		    // Parse the target compressed key for combination operations
+		    secp256k1_pubkey target_pubkey;
+		    if (secp256k1_ec_pubkey_parse(ctx, &target_pubkey, (const unsigned char *)target_compressed.GetData(),
+		                                  33) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // If no direct match, iterate through compressed keys list
+		    for (idx_t k = 0; k < compressed_list.length; k++) {
+			    idx_t compressed_idx = compressed_list.offset + k;
+
+			    // Skip NULL elements
+			    if (FlatVector::IsNull(compressed_child_vector, compressed_idx)) {
+				    continue;
+			    }
+
+			    auto compressed_blob = FlatVector::GetData<string_t>(compressed_child_vector)[compressed_idx];
+
+			    // Validate that this compressed key is exactly 33 bytes
+			    if (compressed_blob.GetSize() != 33) {
+				    continue;
+			    }
+
+			    // Parse the compressed public key
+			    secp256k1_pubkey compressed_pk;
+			    if (secp256k1_ec_pubkey_parse(ctx, &compressed_pk, (const unsigned char *)compressed_blob.GetData(),
+			                                  33) != 1) {
+				    continue;
+			    }
+
+			    // Combine the target compressed key with the current compressed key
+			    const secp256k1_pubkey *pubkeys[2] = {&target_pubkey, &compressed_pk};
+			    secp256k1_pubkey combined_pubkey;
+			    if (secp256k1_ec_pubkey_combine(ctx, &combined_pubkey, pubkeys, 2) != 1) {
+				    continue;
+			    }
+
+			    // Serialize the combined key to compressed format
+			    unsigned char combined_compressed[33];
+			    size_t combined_len = 33;
+			    if (secp256k1_ec_pubkey_serialize(ctx, combined_compressed, &combined_len, &combined_pubkey,
+			                                      SECP256K1_EC_COMPRESSED) != 1) {
+				    continue;
+			    }
+
+			    // Extract first 8 bytes of combined x-coordinate as big-endian int64
+			    // Skip the first byte (compression flag) and take bytes 1-8
+			    int64_t combined_prefix = ExtractBigEndianInt64(combined_compressed + 1);
+
+			    // Check if this combined x value matches any in the first list
+			    for (idx_t j = 0; j < xonly_list.length; j++) {
+				    idx_t child_idx = xonly_list.offset + j;
+
+				    if (FlatVector::IsNull(xonly_child_vector, child_idx)) {
+					    continue;
+				    }
+
+				    // Get the BIGINT value from the list
+				    auto xonly_int64 = FlatVector::GetData<int64_t>(xonly_child_vector)[child_idx];
+
+				    // Compare first 8 bytes as BIGINT
+				    if (xonly_int64 == combined_prefix) {
+					    return true;
+				    }
+			    }
+
+			    // Try with negated result of the addition
+			    secp256k1_pubkey negated_combined_pubkey = combined_pubkey;
+			    if (secp256k1_ec_pubkey_negate(ctx, &negated_combined_pubkey) != 1) {
+				    continue;
+			    }
+
+			    // Serialize the negated combined key to compressed format
+			    unsigned char negated_combined_compressed[33];
+			    size_t negated_combined_len = 33;
+			    if (secp256k1_ec_pubkey_serialize(ctx, negated_combined_compressed, &negated_combined_len,
+			                                      &negated_combined_pubkey, SECP256K1_EC_COMPRESSED) != 1) {
+				    continue;
+			    }
+
+			    // Extract first 8 bytes of negated combined x-coordinate as big-endian int64
+			    // Skip the first byte (compression flag) and take bytes 1-8
+			    int64_t negated_combined_prefix = ExtractBigEndianInt64(negated_combined_compressed + 1);
+
+			    // Check if this negated combined x value matches any in the first list
+			    for (idx_t j = 0; j < xonly_list.length; j++) {
+				    idx_t child_idx = xonly_list.offset + j;
+
+				    if (FlatVector::IsNull(xonly_child_vector, child_idx)) {
+					    continue;
+				    }
+
+				    // Get the BIGINT value from the list
+				    auto xonly_int64 = FlatVector::GetData<int64_t>(xonly_child_vector)[child_idx];
+
+				    // Compare first 8 bytes as BIGINT
+				    if (xonly_int64 == negated_combined_prefix) {
+					    return true;
+				    }
+			    }
+		    }
+
+		    return false;
+	    });
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts an array of blobs
 	auto secp256k1_ec_pubkey_combine_function =
@@ -424,6 +590,13 @@ static void LoadInternal(DatabaseInstance &instance) {
 	auto int_to_big_endian_function =
 	    ScalarFunction("int_to_big_endian", {LogicalType::INTEGER}, LogicalType::BLOB, IntegerToBigEndianScalarFun);
 	ExtensionUtil::RegisterFunction(instance, int_to_big_endian_function);
+
+	// Register the x-only key match function
+	auto secp256k1_xonly_key_match_function = ScalarFunction(
+	    "secp256k1_xonly_key_match",
+	    {LogicalType::LIST(LogicalType::BIGINT), LogicalType::BLOB, LogicalType::LIST(LogicalType::BLOB)},
+	    LogicalType::BOOLEAN, Secp256k1XOnlyKeyMatchScalarFun);
+	ExtensionUtil::RegisterFunction(instance, secp256k1_xonly_key_match_function);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {
