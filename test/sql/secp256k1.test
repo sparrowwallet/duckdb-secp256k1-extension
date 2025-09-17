@@ -715,3 +715,143 @@ SELECT
 FROM comprehensive_test;
 ----
 true
+
+# Test scan_silent_payments function with no label tweaks (empty case)
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('0000000000000000000000000000000000000000000000000000000000000001') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as key),
+  outputs AS (SELECT [8646911284551352320] as list), -- Dummy output that won't match
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])  -- Empty label tweaks
+);
+----
+false
+
+# Test scan_silent_payments function with matching output (functional test)
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('0000000000000000000000000000000000000000000000000000000000000001') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as key),
+  
+  -- Calculate what the output should be for this specific input
+  calculated_output AS (
+    SELECT secp256k1_ec_pubkey_combine([
+      (SELECT key FROM spend_pub),
+      secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', 
+        secp256k1_ec_pubkey_tweak_mul((SELECT key FROM tweak_key), (SELECT key FROM scan_priv)) || int_to_big_endian(0)))
+    ]) as output_key
+  ),
+  
+  -- Extract first 8 bytes as BIGINT
+  output_prefix AS (
+    SELECT hash_prefix_to_int(from_hex(substring(to_hex(output_key), 3, 64)), 0) as prefix
+    FROM calculated_output
+  ),
+  
+  outputs AS (SELECT [(SELECT prefix FROM output_prefix)] as list),
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])  -- Empty label tweaks
+);
+----
+true
+
+# Test scan_silent_payments function with no label tweaks (BIP testcase)
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('9d6ad855ce3417ef84e836892e5a56392bfba05fa5d97ccea30e266f540e08b3')) as key),
+  tweak_key AS (SELECT from_hex('024ac253c216532e961988e2a8ce266a447c894c781e52ef6cee902361db960004') as key),
+  outputs AS (SELECT [4512552348537027144] as list), -- First 8 bytes of expected output x-coordinate
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])  -- Empty label tweaks
+);
+----
+true
+
+# Test scan_silent_payments function with label tweaks
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('9d6ad855ce3417ef84e836892e5a56392bfba05fa5d97ccea30e266f540e08b3')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key),
+  
+  -- Test with a label tweak key
+  label_tweak AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) as key),
+  
+  outputs AS (SELECT [1234567890] as list), -- Dummy output that won't match
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array),
+  tweaks AS (SELECT [(SELECT key FROM label_tweak)] as tweaks_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    (SELECT tweaks_array FROM tweaks)
+);
+----
+false
+
+# Test scan_silent_payments function with change label tweak (BIP testcase)
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('11b7a82e06ca2648d5fded2366478078ec4fc9dc1d8ff487518226f229d768fd') as key),
+  spend_pub AS (SELECT from_hex('03ecd43b9fdad484ff57278b21878b844276ce390622d03dd0cfb4288b7e02a6f5') as key),
+  tweak_key AS (SELECT from_hex('0314bec14463d6c0181083d607fecfba67bb83f95915f6f247975ec566d5642ee8') as key),
+  label_tweak AS (SELECT from_hex('03ecd43b9fdad484ff57278b21878b844276ce390622d03dd0cfb4288b7e02a6f5') as key),
+  outputs AS (SELECT [-4740445252767345406] as list), -- First 8 bytes of expected output x-coordinate
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array),
+  tweaks AS (SELECT [(SELECT key FROM label_tweak)] as tweaks_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    (SELECT tweaks_array FROM tweaks)
+);
+----
+true
+
+# Test scan_silent_payments function with NULL inputs
+query I
+SELECT scan_silent_payments(NULL, NULL, NULL);
+----
+NULL
+
+# Test scan_silent_payments function with invalid keys array length
+query I
+WITH 
+  scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('9d6ad855ce3417ef84e836892e5a56392bfba05fa5d97ccea30e266f540e08b3')) as key),
+  outputs AS (SELECT [1234567890] as list),
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub)] as keys_array)  -- Only two keys instead of three
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])
+);
+----
+NULL
+
+# Test scan_silent_payments function with wrong key sizes
+query I
+WITH 
+  wrong_scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1') as key), -- 31 bytes instead of 32
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('9d6ad855ce3417ef84e836892e5a56392bfba05fa5d97ccea30e266f540e08b3')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000001')) as key),
+  outputs AS (SELECT [1234567890] as list),
+  keys AS (SELECT [(SELECT key FROM wrong_scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])
+);
+----
+NULL

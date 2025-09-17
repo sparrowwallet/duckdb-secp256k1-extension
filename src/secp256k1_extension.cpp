@@ -547,6 +547,238 @@ inline void Secp256k1XOnlyKeyMatchScalarFun(DataChunk &args, ExpressionState &st
 	    });
 }
 
+// Function to scan for silent payments
+inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.ColumnCount() == 3);
+
+	// Get the secp256k1 context
+	secp256k1_context *ctx = GetSecp256k1Context();
+
+	TernaryExecutor::ExecuteWithNulls<list_entry_t, list_entry_t, list_entry_t, bool>(
+	    args.data[0], args.data[1], args.data[2], result, args.size(),
+	    [&](list_entry_t outputs_list, list_entry_t keys_list, list_entry_t label_tweaks_list, ValidityMask &mask,
+	        idx_t idx) {
+		    // Get the child vectors
+		    auto &outputs_child_vector = ListVector::GetEntry(args.data[0]);
+		    auto &keys_child_vector = ListVector::GetEntry(args.data[1]);
+		    auto &label_tweaks_child_vector = ListVector::GetEntry(args.data[2]);
+
+		    // Validate that keys list has exactly 3 elements
+		    if (keys_list.length != 3) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Extract the three keys: scan private key, spend public key, and tweak key
+		    idx_t scan_key_idx = keys_list.offset;
+		    idx_t spend_key_idx = keys_list.offset + 1;
+		    idx_t tweak_key_idx = keys_list.offset + 2;
+
+		    if (FlatVector::IsNull(keys_child_vector, scan_key_idx) ||
+		        FlatVector::IsNull(keys_child_vector, spend_key_idx) ||
+		        FlatVector::IsNull(keys_child_vector, tweak_key_idx)) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    auto scan_private_key = FlatVector::GetData<string_t>(keys_child_vector)[scan_key_idx];
+		    auto spend_public_key = FlatVector::GetData<string_t>(keys_child_vector)[spend_key_idx];
+		    auto tweak_key = FlatVector::GetData<string_t>(keys_child_vector)[tweak_key_idx];
+
+		    // Validate key sizes
+		    if (scan_private_key.GetSize() != 32 || spend_public_key.GetSize() != 33 || tweak_key.GetSize() != 33) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Parse the spend public key once
+		    secp256k1_pubkey spend_pubkey;
+		    if (secp256k1_ec_pubkey_parse(ctx, &spend_pubkey, (const unsigned char *)spend_public_key.GetData(), 33) !=
+		        1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Parse the tweak key
+		    secp256k1_pubkey tweak_pubkey;
+		    if (secp256k1_ec_pubkey_parse(ctx, &tweak_pubkey, (const unsigned char *)tweak_key.GetData(), 33) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Implement: secp256k1_ec_pubkey_tweak_mul(tweak_key, SILENT_PAYMENTS_SCAN_PRIVATE_KEY)
+		    if (secp256k1_ec_pubkey_tweak_mul(ctx, &tweak_pubkey, (const unsigned char *)scan_private_key.GetData()) !=
+		        1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Serialize the tweaked key
+		    unsigned char tweaked_key_serialized[33];
+		    size_t tweaked_len = 33;
+		    if (secp256k1_ec_pubkey_serialize(ctx, tweaked_key_serialized, &tweaked_len, &tweak_pubkey,
+		                                      SECP256K1_EC_COMPRESSED) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Calculate the base shared secret: secp256k1_tagged_sha256('BIP0352/SharedSecret', tweaked_key ||
+		    // int_to_big_endian(0))
+		    std::string tag = "BIP0352/SharedSecret";
+
+		    // Concatenate tweaked_key_serialized + int_to_big_endian(0)
+		    unsigned char base_data[37]; // 33 + 4 bytes
+		    memcpy(base_data, tweaked_key_serialized, 33);
+		    // int_to_big_endian(0) = {0, 0, 0, 0}
+		    base_data[33] = 0;
+		    base_data[34] = 0;
+		    base_data[35] = 0;
+		    base_data[36] = 0;
+
+		    // Compute base shared secret
+		    unsigned char base_shared_secret[32];
+		    if (secp256k1_tagged_sha256(ctx, base_shared_secret, (const unsigned char *)tag.c_str(), tag.size(),
+		                                base_data, 37) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Create public key from base shared secret
+		    secp256k1_pubkey base_shared_pubkey;
+		    if (secp256k1_ec_pubkey_create(ctx, &base_shared_pubkey, base_shared_secret) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Combine with spend public key to get base output key
+		    const secp256k1_pubkey *base_pubkeys[2] = {&spend_pubkey, &base_shared_pubkey};
+		    secp256k1_pubkey base_output_key;
+		    if (secp256k1_ec_pubkey_combine(ctx, &base_output_key, base_pubkeys, 2) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Serialize the base output key to compressed format
+		    unsigned char base_compressed[33];
+		    size_t base_len = 33;
+		    if (secp256k1_ec_pubkey_serialize(ctx, base_compressed, &base_len, &base_output_key,
+		                                      SECP256K1_EC_COMPRESSED) != 1) {
+			    mask.SetInvalid(idx);
+			    return false;
+		    }
+
+		    // Extract first 8 bytes of base x-coordinate as big-endian int64
+		    int64_t base_prefix = ExtractBigEndianInt64(base_compressed + 1);
+
+		    // Check direct match against outputs list
+		    for (idx_t j = 0; j < outputs_list.length; j++) {
+			    idx_t output_idx = outputs_list.offset + j;
+
+			    if (FlatVector::IsNull(outputs_child_vector, output_idx)) {
+				    continue;
+			    }
+
+			    auto output_int64 = FlatVector::GetData<int64_t>(outputs_child_vector)[output_idx];
+			    if (output_int64 == base_prefix) {
+				    return true;
+			    }
+		    }
+
+		    // If no label tweaks provided, we're done (no match found)
+		    if (label_tweaks_list.length == 0) {
+			    return false;
+		    }
+
+		    // Process each label tweak by adding it to the base output key
+		    for (idx_t k = 0; k < label_tweaks_list.length; k++) {
+			    idx_t label_idx = label_tweaks_list.offset + k;
+
+			    if (FlatVector::IsNull(label_tweaks_child_vector, label_idx)) {
+				    continue;
+			    }
+
+			    auto label_tweak = FlatVector::GetData<string_t>(label_tweaks_child_vector)[label_idx];
+
+			    // Validate that the label tweak is exactly 33 bytes (compressed pubkey)
+			    if (label_tweak.GetSize() != 33) {
+				    continue;
+			    }
+
+			    // Parse the label tweak public key
+			    secp256k1_pubkey label_tweak_pubkey;
+			    if (secp256k1_ec_pubkey_parse(ctx, &label_tweak_pubkey, (const unsigned char *)label_tweak.GetData(),
+			                                  33) != 1) {
+				    continue;
+			    }
+
+			    // Combine the base output key with the label tweak key
+			    const secp256k1_pubkey *tweak_pubkeys[2] = {&base_output_key, &label_tweak_pubkey};
+			    secp256k1_pubkey tweaked_output_key;
+			    if (secp256k1_ec_pubkey_combine(ctx, &tweaked_output_key, tweak_pubkeys, 2) != 1) {
+				    continue;
+			    }
+
+			    // Serialize the tweaked output key to compressed format
+			    unsigned char tweaked_compressed[33];
+			    size_t tweaked_len = 33;
+			    if (secp256k1_ec_pubkey_serialize(ctx, tweaked_compressed, &tweaked_len, &tweaked_output_key,
+			                                      SECP256K1_EC_COMPRESSED) != 1) {
+				    continue;
+			    }
+
+			    // Extract first 8 bytes of tweaked x-coordinate as big-endian int64
+			    int64_t tweaked_prefix = ExtractBigEndianInt64(tweaked_compressed + 1);
+
+			    // Check if this tweaked x value matches any in the outputs list
+			    for (idx_t j = 0; j < outputs_list.length; j++) {
+				    idx_t output_idx = outputs_list.offset + j;
+
+				    if (FlatVector::IsNull(outputs_child_vector, output_idx)) {
+					    continue;
+				    }
+
+				    auto output_int64 = FlatVector::GetData<int64_t>(outputs_child_vector)[output_idx];
+				    if (output_int64 == tweaked_prefix) {
+					    return true;
+				    }
+			    }
+
+			    // Try with negated result of the addition
+			    secp256k1_pubkey negated_tweaked_key = tweaked_output_key;
+			    if (secp256k1_ec_pubkey_negate(ctx, &negated_tweaked_key) != 1) {
+				    continue;
+			    }
+
+			    // Serialize the negated tweaked key to compressed format
+			    unsigned char negated_tweaked_compressed[33];
+			    size_t negated_tweaked_len = 33;
+			    if (secp256k1_ec_pubkey_serialize(ctx, negated_tweaked_compressed, &negated_tweaked_len,
+			                                      &negated_tweaked_key, SECP256K1_EC_COMPRESSED) != 1) {
+				    continue;
+			    }
+
+			    // Extract first 8 bytes of negated tweaked x-coordinate as big-endian int64
+			    int64_t negated_tweaked_prefix = ExtractBigEndianInt64(negated_tweaked_compressed + 1);
+
+			    // Check if this negated tweaked x value matches any in the outputs list
+			    for (idx_t j = 0; j < outputs_list.length; j++) {
+				    idx_t output_idx = outputs_list.offset + j;
+
+				    if (FlatVector::IsNull(outputs_child_vector, output_idx)) {
+					    continue;
+				    }
+
+				    auto output_int64 = FlatVector::GetData<int64_t>(outputs_child_vector)[output_idx];
+				    if (output_int64 == negated_tweaked_prefix) {
+					    return true;
+				    }
+			    }
+		    }
+
+		    return false;
+	    });
+}
+
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts an array of blobs
 	auto secp256k1_ec_pubkey_combine_function =
@@ -597,6 +829,14 @@ static void LoadInternal(DatabaseInstance &instance) {
 	    {LogicalType::LIST(LogicalType::BIGINT), LogicalType::BLOB, LogicalType::LIST(LogicalType::BLOB)},
 	    LogicalType::BOOLEAN, Secp256k1XOnlyKeyMatchScalarFun);
 	ExtensionUtil::RegisterFunction(instance, secp256k1_xonly_key_match_function);
+
+	// Register the scan_silent_payments function
+	auto scan_silent_payments_function =
+	    ScalarFunction("scan_silent_payments",
+	                   {LogicalType::LIST(LogicalType::BIGINT), LogicalType::LIST(LogicalType::BLOB),
+	                    LogicalType::LIST(LogicalType::BLOB)},
+	                   LogicalType::BOOLEAN, ScanSilentPaymentsScalarFun);
+	ExtensionUtil::RegisterFunction(instance, scan_silent_payments_function);
 }
 
 void Secp256k1Extension::Load(DuckDB &db) {

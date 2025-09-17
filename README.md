@@ -152,6 +152,90 @@ SELECT secp256k1_xonly_key_match(
 ) FROM x_coords; -- Returns: true
 ```
 
+#### `scan_silent_payments(outputs, keys, label_tweaks)`
+
+Efficiently scans for Bitcoin Silent Payments (BIP 352) by combining multiple cryptographic operations into a single function. This function implements the core silent payments scanning algorithm, avoiding the serialization/deserialization overhead that would occur when using individual functions.
+
+**Parameters:**
+- `outputs` (LIST[BIGINT]): Array of 64-bit integers representing the first 8 bytes (big-endian) of output x-coordinates to scan for matches
+- `keys` (LIST[BLOB]): Array containing exactly 3 elements: [scan_private_key (32 bytes), spend_public_key (33 bytes), tweak_key (33 bytes)]
+- `label_tweaks` (LIST[BLOB]): Array of 33-byte compressed public keys representing label tweak keys for labeled outputs (can be empty)
+
+**Returns:** BOOLEAN (true if any matching output is found, false otherwise)
+
+**Algorithm:**
+1. **Tweak Multiplication**: Multiplies the tweak_key by the scan_private_key using `secp256k1_ec_pubkey_tweak_mul(tweak_key, scan_private_key)`
+2. **Base Shared Secret**: Computes the base shared secret using `secp256k1_tagged_sha256('BIP0352/SharedSecret', tweaked_key || int_to_big_endian(0))`
+3. **Base Output Key**: Creates base output key by combining spend_public_key with the public key derived from the base shared secret
+4. **Direct Match Check**: Extracts first 8 bytes of base output key's x-coordinate and checks against the outputs list
+5. **Label Tweak Processing**: For each label tweak key:
+   - Combines the base output key with the label tweak key using elliptic curve addition
+   - Checks if the combined result matches any output in the list
+   - Also checks the negated version of the combined result (covers both possible y-coordinates)
+6. **Early Return**: Returns true immediately upon finding any match
+
+**Example:**
+```sql
+-- Basic silent payments scanning without label tweaks
+WITH 
+  scan_priv AS (SELECT from_hex('0000000000000000000000000000000000000000000000000000000000000001') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as key),
+  
+  -- Outputs to scan (first 8 bytes of x-coordinates as BIGINT)
+  outputs_to_scan AS (SELECT [1234567890123456789, 9876543210987654321] as list),
+  
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs_to_scan),
+    (SELECT keys_array FROM keys),
+    CAST([] AS BLOB[])  -- No label tweaks
+); -- Returns: true/false depending on whether any output matches
+
+-- Silent payments scanning with label tweaks
+WITH 
+  scan_priv AS (SELECT from_hex('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef') as key),
+  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321')) as key),
+  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890')) as key),
+  
+  -- Label tweak keys for labeled outputs
+  label_tweaks AS (SELECT [
+    secp256k1_ec_pubkey_create(from_hex('1111111111111111111111111111111111111111111111111111111111111111')),
+    secp256k1_ec_pubkey_create(from_hex('2222222222222222222222222222222222222222222222222222222222222222'))
+  ] as tweaks),
+  
+  outputs_to_scan AS (SELECT [hash_prefix_to_int(from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'), 0)] as list),
+  keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
+SELECT scan_silent_payments(
+    (SELECT list FROM outputs_to_scan),
+    (SELECT keys_array FROM keys),
+    (SELECT tweaks FROM label_tweaks)
+); -- Returns: true if any output (base or labeled) matches
+
+-- Equivalent to this complex multi-function SQL (but much more efficient):
+-- SELECT secp256k1_xonly_key_match(
+--     outputs,
+--     secp256k1_ec_pubkey_combine([
+--         spend_public_key,
+--         secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', 
+--             secp256k1_ec_pubkey_tweak_mul(tweak_key, scan_private_key) || int_to_big_endian(0)))
+--     ]),
+--     label_tweak_keys
+-- );
+```
+
+**Performance Benefits:**
+- **Reduced Overhead**: Eliminates serialization/deserialization between individual secp256k1 function calls
+- **Memory Efficiency**: Operates on internal secp256k1 data structures without intermediate conversions
+- **Atomic Operation**: Single function call handles entire scanning workflow
+- **Early Termination**: Returns immediately upon finding first match, avoiding unnecessary computations
+
+**Use Cases:**
+- Bitcoin Silent Payments wallet scanning (BIP 352)
+- Batch checking of multiple output candidates
+- Efficient labeled silent payments processing
+- High-performance blockchain analysis requiring multiple key operations
+
 ### Cryptographic Hash Functions
 
 #### `secp256k1_tagged_sha256(tag, message)`
