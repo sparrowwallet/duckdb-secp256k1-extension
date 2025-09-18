@@ -586,24 +586,39 @@ inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state,
 		    auto tweak_key = FlatVector::GetData<string_t>(keys_child_vector)[tweak_key_idx];
 
 		    // Validate key sizes
-		    if (scan_private_key.GetSize() != 32 || spend_public_key.GetSize() != 33 || tweak_key.GetSize() != 33) {
+		    if (scan_private_key.GetSize() != 32 ||
+		        (spend_public_key.GetSize() != 33 && spend_public_key.GetSize() != 64) ||
+		        (tweak_key.GetSize() != 33 && tweak_key.GetSize() != 64)) {
 			    mask.SetInvalid(idx);
 			    return false;
 		    }
 
-		    // Parse the spend public key once
+		    // Parse or cast the spend public key
 		    secp256k1_pubkey spend_pubkey;
-		    if (secp256k1_ec_pubkey_parse(ctx, &spend_pubkey, (const unsigned char *)spend_public_key.GetData(), 33) !=
-		        1) {
-			    mask.SetInvalid(idx);
-			    return false;
+		    if (spend_public_key.GetSize() == 33) {
+			    // 33-byte compressed format - parse it
+			    if (secp256k1_ec_pubkey_parse(ctx, &spend_pubkey, (const unsigned char *)spend_public_key.GetData(),
+			                                  33) != 1) {
+				    mask.SetInvalid(idx);
+				    return false;
+			    }
+		    } else {
+			    // 64-byte raw secp256k1_pubkey struct - cast directly
+			    spend_pubkey = *(const secp256k1_pubkey *)spend_public_key.GetData();
 		    }
 
-		    // Parse the tweak key
+		    // Parse or cast the tweak key
 		    secp256k1_pubkey tweak_pubkey;
-		    if (secp256k1_ec_pubkey_parse(ctx, &tweak_pubkey, (const unsigned char *)tweak_key.GetData(), 33) != 1) {
-			    mask.SetInvalid(idx);
-			    return false;
+		    if (tweak_key.GetSize() == 33) {
+			    // 33-byte compressed format - parse it
+			    if (secp256k1_ec_pubkey_parse(ctx, &tweak_pubkey, (const unsigned char *)tweak_key.GetData(), 33) !=
+			        1) {
+				    mask.SetInvalid(idx);
+				    return false;
+			    }
+		    } else {
+			    // 64-byte raw secp256k1_pubkey struct - cast directly
+			    tweak_pubkey = *(const secp256k1_pubkey *)tweak_key.GetData();
 		    }
 
 		    // Implement: secp256k1_ec_pubkey_tweak_mul(tweak_key, SILENT_PAYMENTS_SCAN_PRIVATE_KEY)
@@ -699,16 +714,22 @@ inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state,
 
 			    auto label_tweak = FlatVector::GetData<string_t>(label_tweaks_child_vector)[label_idx];
 
-			    // Validate that the label tweak is exactly 33 bytes (compressed pubkey)
-			    if (label_tweak.GetSize() != 33) {
+			    // Validate that the label tweak is either 33 bytes (compressed) or 64 bytes (raw struct)
+			    if (label_tweak.GetSize() != 33 && label_tweak.GetSize() != 64) {
 				    continue;
 			    }
 
-			    // Parse the label tweak public key
+			    // Parse or cast the label tweak public key
 			    secp256k1_pubkey label_tweak_pubkey;
-			    if (secp256k1_ec_pubkey_parse(ctx, &label_tweak_pubkey, (const unsigned char *)label_tweak.GetData(),
-			                                  33) != 1) {
-				    continue;
+			    if (label_tweak.GetSize() == 33) {
+				    // 33-byte compressed format - parse it
+				    if (secp256k1_ec_pubkey_parse(ctx, &label_tweak_pubkey,
+				                                  (const unsigned char *)label_tweak.GetData(), 33) != 1) {
+					    continue;
+				    }
+			    } else {
+				    // 64-byte raw secp256k1_pubkey struct - cast directly
+				    label_tweak_pubkey = *(const secp256k1_pubkey *)label_tweak.GetData();
 			    }
 
 			    // Combine the base output key with the label tweak key

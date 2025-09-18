@@ -158,8 +158,10 @@ Efficiently scans for Bitcoin Silent Payments (BIP 352) by combining multiple cr
 
 **Parameters:**
 - `outputs` (LIST[BIGINT]): Array of 64-bit integers representing the first 8 bytes (big-endian) of output x-coordinates to scan for matches
-- `keys` (LIST[BLOB]): Array containing exactly 3 elements: [scan_private_key (32 bytes), spend_public_key (33 bytes), tweak_key (33 bytes)]
-- `label_tweaks` (LIST[BLOB]): Array of 33-byte compressed public keys representing label tweak keys for labeled outputs (can be empty)
+- `keys` (LIST[BLOB]): Array containing exactly 3 elements: [scan_private_key (32 bytes), spend_public_key (33 or 64 bytes), tweak_key (33 or 64 bytes)]
+- `label_tweaks` (LIST[BLOB]): Array of compressed public keys (33 bytes) or raw secp256k1_pubkey structs (64 bytes) representing label tweak keys for labeled outputs (can be empty)
+
+If public keys are provided as 64 bytes, they must be in little endian format with the x-value first, followed by the y value.
 
 **Returns:** BOOLEAN (true if any matching output is found, false otherwise)
 
@@ -229,6 +231,12 @@ SELECT scan_silent_payments(
 - **Memory Efficiency**: Operates on internal secp256k1 data structures without intermediate conversions
 - **Atomic Operation**: Single function call handles entire scanning workflow
 - **Early Termination**: Returns immediately upon finding first match, avoiding unnecessary computations
+- **Flexible Key Formats**: Accepts both 33-byte compressed keys and 64-byte raw secp256k1_pubkey structs for maximum efficiency
+
+**Key Format Support:**
+- **33-byte compressed keys**: Parsed using `secp256k1_ec_pubkey_parse()` 
+- **64-byte raw structs**: Cast directly to `secp256k1_pubkey` without parsing overhead for maximum performance
+- **Automatic detection**: Function automatically detects format based on byte length
 
 **Use Cases:**
 - Bitcoin Silent Payments wallet scanning (BIP 352)
