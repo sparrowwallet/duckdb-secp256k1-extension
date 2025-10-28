@@ -855,8 +855,9 @@ std::string Secp256k1Extension::Version() const {
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(secp256k1, loader) { LoadInternal(loader); }
-
+DUCKDB_CPP_EXTENSION_ENTRY(secp256k1, loader) {
+	LoadInternal(loader);
+}
 }
 
 #ifndef DUCKDB_EXTENSION_MAIN
