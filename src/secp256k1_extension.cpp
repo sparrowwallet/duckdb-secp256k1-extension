@@ -762,37 +762,6 @@ inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state,
 					    return true;
 				    }
 			    }
-
-			    // Try with negated result of the addition
-			    secp256k1_pubkey negated_tweaked_key = tweaked_output_key;
-			    if (secp256k1_ec_pubkey_negate(ctx, &negated_tweaked_key) != 1) {
-				    continue;
-			    }
-
-			    // Serialize the negated tweaked key to compressed format
-			    unsigned char negated_tweaked_compressed[33];
-			    size_t negated_tweaked_len = 33;
-			    if (secp256k1_ec_pubkey_serialize(ctx, negated_tweaked_compressed, &negated_tweaked_len,
-			                                      &negated_tweaked_key, SECP256K1_EC_COMPRESSED) != 1) {
-				    continue;
-			    }
-
-			    // Extract first 8 bytes of negated tweaked x-coordinate as big-endian int64
-			    int64_t negated_tweaked_prefix = ExtractBigEndianInt64(negated_tweaked_compressed + 1);
-
-			    // Check if this negated tweaked x value matches any in the outputs list
-			    for (idx_t j = 0; j < outputs_list.length; j++) {
-				    idx_t output_idx = outputs_list.offset + j;
-
-				    if (FlatVector::IsNull(outputs_child_vector, output_idx)) {
-					    continue;
-				    }
-
-				    auto output_int64 = FlatVector::GetData<int64_t>(outputs_child_vector)[output_idx];
-				    if (output_int64 == negated_tweaked_prefix) {
-					    return true;
-				    }
-			    }
 		    }
 
 		    return false;
