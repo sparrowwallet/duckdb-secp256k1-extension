@@ -5,7 +5,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 
 // secp256k1 library
@@ -800,56 +799,56 @@ inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state,
 	    });
 }
 
-static void LoadInternal(DatabaseInstance &instance) {
+static void LoadInternal(ExtensionLoader &loader) {
 	// Register the secp256k1_ec_pubkey_combine function that accepts an array of blobs
 	auto secp256k1_ec_pubkey_combine_function =
 	    ScalarFunction("secp256k1_ec_pubkey_combine", {LogicalType::LIST(LogicalType::BLOB)}, LogicalType::BLOB,
 	                   Secp256k1EcPubkeyCombineScalarFun);
-	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_combine_function);
+	loader.RegisterFunction(secp256k1_ec_pubkey_combine_function);
 
 	// Register the create_outpoint function
 	auto create_outpoint_function = ScalarFunction("create_outpoint", {LogicalType::BLOB, LogicalType::INTEGER},
 	                                               LogicalType::BLOB, CreateOutpointScalarFun);
-	ExtensionUtil::RegisterFunction(instance, create_outpoint_function);
+	loader.RegisterFunction(create_outpoint_function);
 
 	// Register the min_outpoint function that accepts an array of blobs
 	auto min_outpoint_function =
 	    ScalarFunction("min_outpoint", {LogicalType::LIST(LogicalType::BLOB)}, LogicalType::BLOB, MinOutpointScalarFun);
-	ExtensionUtil::RegisterFunction(instance, min_outpoint_function);
+	loader.RegisterFunction(min_outpoint_function);
 
 	// Register the secp256k1_tagged_sha256 function
 	auto secp256k1_tagged_sha256_function =
 	    ScalarFunction("secp256k1_tagged_sha256", {LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB,
 	                   Secp256k1TaggedSha256ScalarFun);
-	ExtensionUtil::RegisterFunction(instance, secp256k1_tagged_sha256_function);
+	loader.RegisterFunction(secp256k1_tagged_sha256_function);
 
 	// Register the secp256k1_ec_pubkey_tweak_mul function
 	auto secp256k1_ec_pubkey_tweak_mul_function =
 	    ScalarFunction("secp256k1_ec_pubkey_tweak_mul", {LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB,
 	                   Secp256k1EcPubkeyTweakMulScalarFun);
-	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_tweak_mul_function);
+	loader.RegisterFunction(secp256k1_ec_pubkey_tweak_mul_function);
 
 	// Register the secp256k1_ec_pubkey_create function
 	auto secp256k1_ec_pubkey_create_function = ScalarFunction("secp256k1_ec_pubkey_create", {LogicalType::BLOB},
 	                                                          LogicalType::BLOB, Secp256k1EcPubkeyCreateScalarFun);
-	ExtensionUtil::RegisterFunction(instance, secp256k1_ec_pubkey_create_function);
+	loader.RegisterFunction(secp256k1_ec_pubkey_create_function);
 
 	// Register the hash prefix to integer function
 	auto hash_prefix_to_int_function = ScalarFunction("hash_prefix_to_int", {LogicalType::BLOB, LogicalType::UINTEGER},
 	                                                  LogicalType::BIGINT, HashPrefixToIntScalarFun);
-	ExtensionUtil::RegisterFunction(instance, hash_prefix_to_int_function);
+	loader.RegisterFunction(hash_prefix_to_int_function);
 
 	// Register the integer to big-endian function
 	auto int_to_big_endian_function =
 	    ScalarFunction("int_to_big_endian", {LogicalType::INTEGER}, LogicalType::BLOB, IntegerToBigEndianScalarFun);
-	ExtensionUtil::RegisterFunction(instance, int_to_big_endian_function);
+	loader.RegisterFunction(int_to_big_endian_function);
 
 	// Register the x-only key match function
 	auto secp256k1_xonly_key_match_function = ScalarFunction(
 	    "secp256k1_xonly_key_match",
 	    {LogicalType::LIST(LogicalType::BIGINT), LogicalType::BLOB, LogicalType::LIST(LogicalType::BLOB)},
 	    LogicalType::BOOLEAN, Secp256k1XOnlyKeyMatchScalarFun);
-	ExtensionUtil::RegisterFunction(instance, secp256k1_xonly_key_match_function);
+	loader.RegisterFunction(secp256k1_xonly_key_match_function);
 
 	// Register the scan_silent_payments function
 	auto scan_silent_payments_function =
@@ -857,11 +856,18 @@ static void LoadInternal(DatabaseInstance &instance) {
 	                   {LogicalType::LIST(LogicalType::BIGINT), LogicalType::LIST(LogicalType::BLOB),
 	                    LogicalType::LIST(LogicalType::BLOB)},
 	                   LogicalType::BOOLEAN, ScanSilentPaymentsScalarFun);
-	ExtensionUtil::RegisterFunction(instance, scan_silent_payments_function);
+	loader.RegisterFunction(scan_silent_payments_function);
 }
 
-void Secp256k1Extension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+Secp256k1Extension::~Secp256k1Extension() {
+	if (secp256k1_ctx) {
+		secp256k1_context_destroy(secp256k1_ctx);
+		secp256k1_ctx = nullptr;
+	}
+}
+
+void Secp256k1Extension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 
 std::string Secp256k1Extension::Name() {
@@ -880,22 +886,8 @@ std::string Secp256k1Extension::Version() const {
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void secp256k1_init(duckdb::DatabaseInstance &db) {
-	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadExtension<duckdb::Secp256k1Extension>();
-}
+DUCKDB_CPP_EXTENSION_ENTRY(secp256k1, loader) { LoadInternal(loader); }
 
-DUCKDB_EXTENSION_API const char *secp256k1_version() {
-	return duckdb::DuckDB::LibraryVersion();
-}
-
-// Cleanup function to destroy the secp256k1 context
-DUCKDB_EXTENSION_API void secp256k1_cleanup() {
-	if (duckdb::secp256k1_ctx) {
-		secp256k1_context_destroy(duckdb::secp256k1_ctx);
-		duckdb::secp256k1_ctx = nullptr;
-	}
-}
 }
 
 #ifndef DUCKDB_EXTENSION_MAIN

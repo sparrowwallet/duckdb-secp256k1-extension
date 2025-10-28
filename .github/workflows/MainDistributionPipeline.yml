@@ -26,15 +26,15 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.3.2
     with:
-      duckdb_version: v1.3.2
-      ci_tools_version: v1.3.2
+      duckdb_version: v1.4.1
+      ci_tools_version: v1.4.1
       extension_name: secp256k1
 
   code-quality-check:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: v1.3.2
+      duckdb_version: v1.4.1
       ci_tools_version: main
       extension_name: secp256k1
       format_checks: 'format;tidy'
