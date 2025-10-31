@@ -505,41 +505,6 @@ inline void Secp256k1XOnlyKeyMatchScalarFun(DataChunk &args, ExpressionState &st
 					    return true;
 				    }
 			    }
-
-			    // Try with negated result of the addition
-			    secp256k1_pubkey negated_combined_pubkey = combined_pubkey;
-			    if (secp256k1_ec_pubkey_negate(ctx, &negated_combined_pubkey) != 1) {
-				    continue;
-			    }
-
-			    // Serialize the negated combined key to compressed format
-			    unsigned char negated_combined_compressed[33];
-			    size_t negated_combined_len = 33;
-			    if (secp256k1_ec_pubkey_serialize(ctx, negated_combined_compressed, &negated_combined_len,
-			                                      &negated_combined_pubkey, SECP256K1_EC_COMPRESSED) != 1) {
-				    continue;
-			    }
-
-			    // Extract first 8 bytes of negated combined x-coordinate as big-endian int64
-			    // Skip the first byte (compression flag) and take bytes 1-8
-			    int64_t negated_combined_prefix = ExtractBigEndianInt64(negated_combined_compressed + 1);
-
-			    // Check if this negated combined x value matches any in the first list
-			    for (idx_t j = 0; j < xonly_list.length; j++) {
-				    idx_t child_idx = xonly_list.offset + j;
-
-				    if (FlatVector::IsNull(xonly_child_vector, child_idx)) {
-					    continue;
-				    }
-
-				    // Get the BIGINT value from the list
-				    auto xonly_int64 = FlatVector::GetData<int64_t>(xonly_child_vector)[child_idx];
-
-				    // Compare first 8 bytes as BIGINT
-				    if (xonly_int64 == negated_combined_prefix) {
-					    return true;
-				    }
-			    }
 		    }
 
 		    return false;
