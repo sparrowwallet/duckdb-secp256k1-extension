@@ -70,13 +70,12 @@ If public keys are provided as 64 bytes, they must be in little endian format wi
 ```sql
 -- Basic silent payments scanning without label tweaks
 WITH 
-  scan_priv AS (SELECT from_hex('0000000000000000000000000000000000000000000000000000000000000001') as key),
-  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000002')) as key),
-  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('0000000000000000000000000000000000000000000000000000000000000003')) as key),
+  scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c') as key),
+  spend_pub AS (SELECT from_hex('36cf8fcd4d4890ab6c1083aeb5b50c260c20acda7839120e3575836f6d85c95ce0d705e31ff9fdcce67a8f3598871c6dfbe6bcde8a51cb7b48b0f95be0ea94de') as key),
+  tweak_key AS (SELECT from_hex('040096db612390ee6cef521e784c897c446a26cea8e28819962e5316c253c24a501e53f71071162afab559954064f0ccb7a6779c23b305597b6335829cc1f5b7') as key),
   
   -- Outputs to scan (first 8 bytes of x-coordinates as BIGINT)
-  outputs_to_scan AS (SELECT [1234567890123456789, 9876543210987654321] as list),
-  
+  outputs_to_scan AS (SELECT [hash_prefix_to_int(from_hex('3e9fce73d4e77a4809908e3c3a2e54ee147b9312dc5044a193d1fc85de46e3c1'), 0)] as list),
   keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
 SELECT scan_silent_payments(
     (SELECT list FROM outputs_to_scan),
@@ -86,17 +85,16 @@ SELECT scan_silent_payments(
 
 -- Silent payments scanning with label tweaks
 WITH 
-  scan_priv AS (SELECT from_hex('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef') as key),
-  spend_pub AS (SELECT secp256k1_ec_pubkey_create(from_hex('fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321')) as key),
-  tweak_key AS (SELECT secp256k1_ec_pubkey_create(from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890')) as key),
+  scan_priv AS (SELECT from_hex('0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c') as key),
+  spend_pub AS (SELECT from_hex('36cf8fcd4d4890ab6c1083aeb5b50c260c20acda7839120e3575836f6d85c95ce0d705e31ff9fdcce67a8f3598871c6dfbe6bcde8a51cb7b48b0f95be0ea94de') as key),
+  tweak_key AS (SELECT from_hex('040096db612390ee6cef521e784c897c446a26cea8e28819962e5316c253c24a501e53f71071162afab559954064f0ccb7a6779c23b305597b6335829cc1f5b7') as key),
   
   -- Label tweak keys for labeled outputs
   label_tweaks AS (SELECT [
-    secp256k1_ec_pubkey_create(from_hex('1111111111111111111111111111111111111111111111111111111111111111')),
-    secp256k1_ec_pubkey_create(from_hex('2222222222222222222222222222222222222222222222222222222222222222'))
+    from_hex('cd63f9212a2deebde8a71e9ea23f6f958c47c41d2ed74b9617fe6fb554d1524e292fabddbdcbb643eafc328875c46d75a1d697b2b31c42d38aa93f85eab34bc1')
   ] as tweaks),
   
-  outputs_to_scan AS (SELECT [hash_prefix_to_int(from_hex('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'), 0)] as list),
+  outputs_to_scan AS (SELECT [hash_prefix_to_int(from_hex('3e9fce73d4e77a4809908e3c3a2e54ee147b9312dc5044a193d1fc85de46e3c1'), 0)] as list),
   keys AS (SELECT [(SELECT key FROM scan_priv), (SELECT key FROM spend_pub), (SELECT key FROM tweak_key)] as keys_array)
 SELECT scan_silent_payments(
     (SELECT list FROM outputs_to_scan),
