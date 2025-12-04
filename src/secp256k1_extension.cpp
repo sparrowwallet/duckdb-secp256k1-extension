@@ -622,17 +622,9 @@ inline void ScanSilentPaymentsScalarFun(DataChunk &args, ExpressionState &state,
 			    return false;
 		    }
 
-		    // Create public key from base shared secret
-		    secp256k1_pubkey base_shared_pubkey;
-		    if (secp256k1_ec_pubkey_create(ctx, &base_shared_pubkey, base_shared_secret) != 1) {
-			    mask.SetInvalid(idx);
-			    return false;
-		    }
-
-		    // Combine with spend public key to get base output key
-		    const secp256k1_pubkey *base_pubkeys[2] = {&spend_pubkey, &base_shared_pubkey};
-		    secp256k1_pubkey base_output_key;
-		    if (secp256k1_ec_pubkey_combine(ctx, &base_output_key, base_pubkeys, 2) != 1) {
+		    // Get base output key by tweaking spend public key with base shared secret
+		    secp256k1_pubkey base_output_key = spend_pubkey;
+		    if (secp256k1_ec_pubkey_tweak_add(ctx, &base_output_key, base_shared_secret) != 1) {
 			    mask.SetInvalid(idx);
 			    return false;
 		    }
