@@ -15,17 +15,17 @@ concurrency:
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.1
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.4
     with:
-      duckdb_version: v1.4.1
-      ci_tools_version: v1.4.1
+      duckdb_version: v1.4.4
+      ci_tools_version: v1.4.4
       extension_name: secp256k1
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.4.4
     with:
-      duckdb_version: v1.4.1
-      ci_tools_version: main
+      duckdb_version: v1.4.4
+      ci_tools_version: v1.4.4
       extension_name: secp256k1
       format_checks: 'format;tidy'
