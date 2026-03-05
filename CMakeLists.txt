@@ -21,10 +21,22 @@ set(EXTENSION_SOURCES
 # Add necessary preprocessor definitions for secp256k1
 add_definitions(-DECMULT_WINDOW_SIZE=15)
 add_definitions(-DECMULT_GEN_PRECISION_BITS=4)
-add_definitions(-DUSE_FIELD_10X26)
-add_definitions(-DUSE_SCALAR_8X32)
 add_definitions(-DENABLE_MODULE_ECDH)
 add_definitions(-DENABLE_MODULE_EXTRAKEYS)
+
+# Enable x86_64 inline assembly for optimized scalar multiplication
+# (same check as libsecp256k1's cmake/CheckX86_64Assembly.cmake)
+include(CheckCSourceCompiles)
+check_c_source_compiles("
+    #include <stdint.h>
+    int main() {
+        uint64_t a = 11, tmp;
+        __asm__ __volatile__(\"movq $0x100000000,%1; mulq %%rsi\" : \"+a\"(a) : \"S\"(tmp) : \"cc\", \"%rdx\");
+    }
+" HAVE_X86_64_ASM)
+if(HAVE_X86_64_ASM)
+    add_definitions(-DUSE_ASM_X86_64=1)
+endif()
 
 # Windows-specific definitions for static linking
 if(WIN32)
